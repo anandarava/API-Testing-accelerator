@@ -3,13 +3,25 @@ import { useMutation } from '@tanstack/react-query';
 import { ChevronDown, Download, FileSpreadsheet, FileText, Sparkles } from 'lucide-react';
 import { api } from '../lib/api';
 import { useHelper, useProjectId } from '../lib/queries';
-import { Alert, Button, Dialog, Field, Textarea, useToast } from './ui';
+import { Alert, Button, Dialog, Field, Textarea, cx, useToast } from './ui';
 
 /** Download the project's cases as Excel or CSV for sign-off. */
+const MENU_WIDTH = 288; // w-72
+
 export function ExportMenu({ module }: { module: 'unit' | 'flow' | 'role' }) {
   const projectId = useProjectId();
   const [open, setOpen] = useState(false);
+  const [alignLeft, setAlignLeft] = useState(false);
   const ref = useRef<HTMLDivElement>(null);
+  const toggle = () => {
+    if (!open && ref.current) {
+      // The menu opens leftwards from the button's right edge; anchor it to the left edge when that would be clipped.
+      const button = ref.current.getBoundingClientRect();
+      const bound = ref.current.closest('main')?.getBoundingClientRect().left ?? 0;
+      setAlignLeft(button.right - MENU_WIDTH < bound + 8);
+    }
+    setOpen(!open);
+  };
   useEffect(() => {
     const close = (event: MouseEvent) => ref.current && !ref.current.contains(event.target as Node) && setOpen(false);
     document.addEventListener('mousedown', close);
@@ -23,9 +35,9 @@ export function ExportMenu({ module }: { module: 'unit' | 'flow' | 'role' }) {
   ];
   return (
     <div className="relative" ref={ref}>
-      <Button variant="secondary" icon={<Download className="size-4" />} onClick={() => setOpen(!open)}>Export <ChevronDown className="size-4" /></Button>
+      <Button variant="secondary" icon={<Download className="size-4" />} onClick={toggle}>Export <ChevronDown className="size-4" /></Button>
       {open && (
-        <div className="absolute right-0 top-11 z-20 w-72 rounded-xl border border-line bg-surface p-1.5 shadow-lg animate-pop-in">
+        <div className={cx('absolute top-11 z-20 w-72 rounded-xl border border-line bg-surface p-1.5 shadow-lg animate-pop-in', alignLeft ? 'left-0' : 'right-0')}>
           {options.map((option) => (
             <a key={option.label} href={option.href} onClick={() => setOpen(false)} className="flex items-start gap-3 rounded-lg px-3 py-2 hover:bg-canvas">
               <span className="mt-0.5 text-brand-600">{option.icon}</span>

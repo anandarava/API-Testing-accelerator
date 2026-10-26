@@ -143,7 +143,8 @@ function ComputerCard() {
               <p className="text-sm font-medium text-ink">{state.hostname || 'This computer'} is connected</p>
               <p className="text-xs text-muted">
                 Local Helper {state.helperVersion}
-                {claude?.loggedIn ? ` · Claude signed in as ${claude.email}` : ' · Claude is not signed in'} · seen {timeAgo(state.lastSeen)}
+                {claude?.loggedIn ? ` · Claude signed in as ${claude.email}` : ' · Claude is not signed in'}
+                {state.local?.configured && (state.local.reachable ? ` · local AI server ${state.local.server}` : ' · local AI server not reachable')} · seen {timeAgo(state.lastSeen)}
               </p>
             </>
           ) : (
@@ -156,7 +157,7 @@ function ComputerCard() {
         <Button size="sm" variant={state?.connected ? 'secondary' : 'primary'} onClick={() => setOpen(true)}>{state?.connected ? 'Details' : 'Connect'}</Button>
       </div>
       <div className="flex flex-wrap items-center gap-3 px-5 py-3">
-        <span className="text-sm text-ink-soft">Claude model for your jobs</span>
+        <span className="text-sm text-ink-soft">AI model for your jobs</span>
         <ModelPicker />
         {state?.model.lastModels.length ? <span className="text-xs text-muted">Last job ran on {describeModels(state.model.lastModels)}</span> : null}
       </div>

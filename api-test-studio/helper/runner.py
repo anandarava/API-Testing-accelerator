@@ -9,7 +9,7 @@ import httpx
 from contracts import VERSION, HelperHeartbeat
 from contracts.fingerprint import CONTRACT_FINGERPRINT
 
-from . import claude, config, flow_cases, framework, regenerate, role_cases, scripts, unit_cases
+from . import claude, config, flow_cases, framework, local_llm, regenerate, role_cases, scripts, unit_cases
 
 HEARTBEAT_SECONDS = 10
 CLAUDE_REFRESH_SECONDS = 60
@@ -42,11 +42,11 @@ def check(response: httpx.Response) -> httpx.Response:
 
 
 class Helper:
-    def __init__(self, client: httpx.Client, log=print, handlers=None, claude_status=claude.status):
+    def __init__(self, client: httpx.Client, log=print, handlers=None, claude_status=claude.status, local_status=local_llm.status):
         self.client, self.log = client, log
         self.handlers = handlers or HANDLERS
-        self.claude_status = claude_status
-        self._status, self._status_at, self._beat_at = None, 0.0, 0.0
+        self.claude_status, self.local_status = claude_status, local_status
+        self._status, self._local, self._status_at, self._beat_at = None, None, 0.0, 0.0
         self.hostname = socket.gethostname()
 
     def heartbeat(self, force=False):
@@ -54,9 +54,14 @@ class Helper:
         if not force and now - self._beat_at < HEARTBEAT_SECONDS:
             return
         if self._status is None or now - self._status_at > CLAUDE_REFRESH_SECONDS:
-            self._status, self._status_at = self.claude_status(), now
-        body = HelperHeartbeat(hostname=self.hostname, helperVersion=VERSION, claude=self._status)
-        reply = check(self.client.post('/api/helper/heartbeat', json=body.model_dump())).json()
+            self._status, self._local, self._status_at = self.claude_status(), self.local_status(), now
+        body = HelperHeartbeat(hostname=self.hostname, helperVersion=VERSION, claude=self._status, local=self._local)
+        response = self.client.post('/api/helper/heartbeat', json=body.model_dump())
+        if response.status_code == 422:
+            # An older portal rejects fields this helper sends.
+            raise VersionMismatch('This Local Helper is newer than the portal. Restart the portal with the same version of '
+                                  'API Test Studio, then start the helper again.')
+        reply = check(response).json()
         self._beat_at = now
         if reply.get('contracts') != CONTRACT_FINGERPRINT:
             raise VersionMismatch('This Local Helper and the portal are different versions. Update both to the same '
@@ -75,10 +80,7 @@ class Helper:
         job_id, kind = job['id'], job['kind']
         model = job.get('model') or 'default'
         self.log(f'> {kind} for project "{job.get("projectName", "")}" on model: {model}')
-        writer = job.get('writerModel') or ''
-        if writer and job['kind'] == 'flows.generate':
-            self.log(f'  flow steps are written on model: {writer}')
-        claude.job_model.begin(model, writer)
+        claude.job_model.begin(model)
         state = {'message': 'Starting', 'percent': 0, 'models': [], 'usage': claude.job_model.usage()}
         stop = threading.Event()
 
@@ -107,7 +109,7 @@ class Helper:
                 with submit_lock:  # endpoints finish in parallel; send results one at a time
                     check(self.client.post(f'/api/helper/jobs/{job_id}/partial', json={'result': partial}))
             except RuntimeError:
-                # Keep the Claude output so the work is not lost; the job still fails visibly.
+                # Keep the AI output so the work is not lost; the job still fails visibly.
                 folder = config.HOME / 'unsent-results'
                 folder.mkdir(parents=True, exist_ok=True)
                 saved = folder / f'{job_id}-{int(time.time())}.json'
@@ -125,7 +127,7 @@ class Helper:
             used = claude.job_model.models()
             check(self.client.post(f'/api/helper/jobs/{job_id}/complete',
                                    json={'result': result, 'models': used, 'usage': claude.job_model.usage()}))
-            self.log(f"  Done. Claude ran on: {', '.join(used) or 'no Claude call was needed'}")
+            self.log(f"  Done. AI ran on: {', '.join(used) or 'no AI call was needed'}")
         except (PairingRevoked, VersionMismatch):
             raise
         except Exception as exc:  # report every failure to the portal so the user can see it

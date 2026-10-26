@@ -10,19 +10,17 @@ from pathlib import Path
 
 from pydantic import BaseModel
 
-from contracts import ClaudeStatus
+from contracts import LOCAL_MODEL_PREFIX, ClaudeStatus
 
 ASSETS = Path(__file__).resolve().parents[1] / 'claude'
-PROTECTED_ENV = ('STUDIO_HELPER_TOKEN', 'STUDIO_DATABASE_URL')
+PROTECTED_ENV = ('STUDIO_HELPER_TOKEN', 'STUDIO_DATABASE_URL', 'STUDIO_LLM_API_KEY')
 # Longest a single Claude call may run before the helper stops it.
 CLAUDE_TIMEOUT = 60 * 60
-# Agents that may run on the user's separate "writing" model (expanding outlines into detailed steps).
-WRITER_AGENTS = ('flow-case-writer', 'unit-case-writer')
 AGENT_FIELDS = ('calls', 'inputTokens', 'cacheReadTokens', 'cacheWriteTokens', 'outputTokens', 'errors', 'checked', 'checkFailed')
 
 
 class JobModel:
-    """The model chosen for the current job and the models Claude actually reported using.
+    """The model chosen for the current job and the models it actually reported using.
 
     The helper runs one job at a time, but a job may run several Claude calls in parallel threads.
     """
@@ -31,7 +29,7 @@ class JobModel:
               'cacheCreationInputTokens': 'cacheWriteTokens', 'outputTokens': 'outputTokens', 'costUSD': 'costUsd'}
 
     def __init__(self):
-        self.lock, self.selected, self.writer, self.used = threading.Lock(), None, None, {}
+        self.lock, self.selected, self.used = threading.Lock(), None, {}
         self.agents = {}
         self.totals = self._empty()
 
@@ -39,10 +37,9 @@ class JobModel:
     def _empty() -> dict:
         return {'calls': 0, 'inputTokens': 0, 'cacheReadTokens': 0, 'cacheWriteTokens': 0, 'outputTokens': 0, 'costUsd': 0.0}
 
-    def begin(self, selected: str | None, writer: str | None = None):
+    def begin(self, selected: str | None):
         with self.lock:
             self.selected = None if selected in (None, '', 'default') else selected
-            self.writer = None if writer in (None, '', 'default') else writer
             self.agents = {}
             self.used = {}
             self.totals = self._empty()
@@ -185,7 +182,14 @@ def task_prompt(task: dict) -> str:
 
 def run_agent(agent: str, task: dict, schema: type[BaseModel], cwd: str | Path, tools: tuple[str, ...] = (),
               timeout: int = CLAUDE_TIMEOUT, max_turns: int = 40, model: str | None = None, runner=subprocess.run) -> dict:
-    """Run one agent headlessly and return output validated against ``schema``."""
+    """Run one agent headlessly and return output validated against ``schema``.
+
+    A ``local:`` model runs on the user's OpenAI-compatible server instead of Claude Code.
+    """
+    model = model or job_model.selected
+    if model and model.startswith(LOCAL_MODEL_PREFIX):
+        from . import local_llm
+        return local_llm.run_agent(agent, task, schema, cwd, tools=tools, timeout=timeout, max_turns=max_turns, model=model)
     command = claude_command()
     with tempfile.TemporaryDirectory(prefix='studio-agent-') as scratch:
         system_file = Path(scratch) / 'system.md'
@@ -197,7 +201,6 @@ def run_agent(agent: str, task: dict, schema: type[BaseModel], cwd: str | Path, 
         if tools:
             args += ['--allowedTools', ','.join(tools),
                      '--disallowedTools', 'Read(**/.env),Read(**/.env.*),Read(**/*.pem),Read(**/*.key)']
-        model = model or (job_model.writer if agent in WRITER_AGENTS and job_model.writer else job_model.selected)
         if model:
             args += ['--model', model]
         prompt = task_prompt(task)

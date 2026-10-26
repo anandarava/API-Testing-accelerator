@@ -14,7 +14,7 @@ import httpx
 
 from contracts import VERSION
 
-from . import claude, config
+from . import claude, config, local_llm
 from .runner import Helper, PairingRevoked, VersionMismatch, check
 
 DEFAULT_SERVER = 'http://127.0.0.1:8000'
@@ -53,6 +53,13 @@ def status(_args):
     else:
         signed_in = f'signed in as {info.email} ({info.subscriptionType})' if info.loggedIn else 'NOT signed in'
         print(f'Claude Code {info.version}: {signed_in}')
+    local = local_llm.status()
+    if not local.configured:
+        print('Local AI server: not set up (add STUDIO_LLM_BASE_URL and STUDIO_LLM_API_KEY to .env)')
+    elif local.reachable:
+        print(f"Local AI server {local.server}: models {', '.join(local.models) or 'none listed'}")
+    else:
+        print(f'Local AI server {local.server}: {local.error}')
 
 
 def unpair(_args):
@@ -64,9 +71,14 @@ def start(_args):
     saved = config.load()
     if not saved.get('token'):
         sys.exit('This computer is not paired yet. In the portal, click "Connect this computer" and run the pair command.')
-    info = claude.status()
-    if not info.loggedIn:
-        print(f'Warning: {info.error or "Claude Code is not ready."} Jobs will fail until this is fixed.')
+    info, local = claude.status(), local_llm.status()
+    if not info.loggedIn and not local.reachable:
+        print(f'Warning: {info.error or "Claude Code is not ready."} Jobs will fail until this is fixed, '
+              'unless you set up a local AI server in .env.')
+    elif not info.loggedIn:
+        print(f'Claude Code is not ready; only local models ({local.server}) can run jobs.')
+    elif local.configured and not local.reachable:
+        print(f'Note: {local.error} Jobs on local models will fail until this is fixed.')
     print(f"Local Helper {VERSION} connected to {saved['server']} as {saved['user']['name']}. Press Ctrl+C to stop.")
     with httpx.Client(base_url=saved['server'], headers={'Authorization': 'Bearer ' + saved['token']}, timeout=60) as client:
         try:
@@ -85,9 +97,10 @@ def main():
     pair_cmd.add_argument('--server', default=DEFAULT_SERVER)
     pair_cmd.set_defaults(run=pair)
     commands.add_parser('start', help='Run jobs from the portal').set_defaults(run=start)
-    commands.add_parser('status', help='Show pairing and Claude status').set_defaults(run=status)
+    commands.add_parser('status', help='Show pairing, Claude and local AI server status').set_defaults(run=status)
     commands.add_parser('unpair', help='Disconnect this computer').set_defaults(run=unpair)
     args = parser.parse_args()
+    config.load_env()
     args.run(args)
 
 

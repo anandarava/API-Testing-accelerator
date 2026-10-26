@@ -48,6 +48,7 @@ class HelperStatus(Base):
     hostname: Mapped[str] = mapped_column(String(200), default='')
     helper_version: Mapped[str] = mapped_column(String(40), default='')
     claude: Mapped[dict] = mapped_column(JSON, default=dict)
+    local_llm: Mapped[dict] = mapped_column(JSON, default=dict)  # the helper's local AI server, without its key
 
 
 class Project(Base):
@@ -254,11 +255,11 @@ class FlowAnalysis(Base):
 
 
 class UserPreference(Base):
-    """Per-user settings that follow the person across projects, such as the Claude model."""
+    """Per-user settings that follow the person across projects, such as the AI model (Claude or local:<model>)."""
     __tablename__ = 'user_preferences'
     user_id: Mapped[str] = mapped_column(ForeignKey('users.id', ondelete='CASCADE'), primary_key=True)
     claude_model: Mapped[str] = mapped_column(String(60), default='default')
-    writer_model: Mapped[str] = mapped_column(String(60), default='')  # '' = same as claude_model; used to write flow steps
+    writer_model: Mapped[str] = mapped_column(String(60), default='')  # no longer used; kept so older databases stay valid
     last_models: Mapped[list] = mapped_column(JSON, default=list)  # models Claude reported for the latest job
     last_used_at: Mapped[float | None] = mapped_column(Float, nullable=True)
 

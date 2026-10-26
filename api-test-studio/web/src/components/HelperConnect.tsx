@@ -5,7 +5,7 @@ import { api, type HelperState } from '../lib/api';
 import { keys, useHelper } from '../lib/queries';
 import { timeAgo } from '../lib/format';
 import { Alert, Button, CommandLine, Dialog, cx, useToast } from './ui';
-import { describeModels, modelLabel } from './ModelPicker';
+import { describeModels, isLocal, modelLabel } from './ModelPicker';
 
 const plans: Record<string, string> = { pro: 'Pro', max: 'Max', team: 'Team', enterprise: 'Enterprise', free: 'Free' };
 
@@ -17,11 +17,22 @@ export function claudeLabel(state: HelperState | undefined): string {
   return `Claude ${plans[claude.subscriptionType] ?? claude.subscriptionType ?? ''}`.trim();
 }
 
+/** Whether the provider of the chosen model can run jobs: Claude signed in, or the local server reachable. */
+export function aiReady(state: HelperState | undefined): boolean {
+  if (!state?.connected) return false;
+  return isLocal(state.model.claudeModel) ? Boolean(state.local?.reachable) : Boolean(state.claude?.loggedIn);
+}
+
+function chipLabel(state: HelperState): string {
+  if (!isLocal(state.model.claudeModel)) return claudeLabel(state);
+  return state.local?.reachable ? `Local ${state.model.claudeModel.slice('local:'.length)}` : 'Local server not reachable';
+}
+
 export function HelperChip() {
   const { data } = useHelper();
   const [open, setOpen] = useState(false);
-  const ready = data?.connected && data.claude?.loggedIn;
-  const warn = data?.connected && !data.claude?.loggedIn;
+  const ready = aiReady(data);
+  const warn = data?.connected && !ready;
   return (
     <>
       <button
@@ -32,7 +43,7 @@ export function HelperChip() {
               : 'border-line-strong bg-surface text-ink-soft hover:bg-canvas')}
       >
         <span className={cx('size-2 rounded-full', ready ? 'bg-emerald-500' : warn ? 'bg-amber-500' : 'bg-gray-300')} />
-        {data?.connected ? <>Computer connected<span className="hidden opacity-70 sm:inline">· {claudeLabel(data)}</span></> : 'Connect your computer'}
+        {data?.connected ? <>Computer connected<span className="hidden opacity-70 sm:inline">· {chipLabel(data)}</span></> : 'Connect your computer'}
       </button>
       {open && <HelperDialog onClose={() => setOpen(false)} />}
     </>
@@ -64,6 +75,7 @@ export function HelperDialog({ onClose }: { onClose: () => void }) {
 
   if (state?.connected) {
     const claude = state.claude;
+    const local = state.local;
     return (
       <Dialog title="Your computer is connected" onClose={onClose}
         footer={<><Button variant="secondary" icon={<Unplug className="size-4" />} loading={disconnect.isPending} onClick={() => disconnect.mutate()}>Disconnect</Button><Button onClick={onClose}>Done</Button></>}>
@@ -80,10 +92,16 @@ export function HelperDialog({ onClose }: { onClose: () => void }) {
           ) : (
             <Alert tone="warning" title="Claude is not ready on this computer">
               {claude?.error || 'Install Claude Code and sign in.'} Then run <code className="font-mono">claude auth login</code> in a terminal.
+              {local?.reachable && ' You can still run jobs on a local model.'}
             </Alert>
           )}
+          {local?.configured && (local.reachable ? (
+            <Alert tone="success" title={`Local AI server ${local.server} is ready`}>Models: {local.models.join(', ') || 'none listed for your key'}. Pick one under Local server in the Model menu.</Alert>
+          ) : (
+            <Alert tone="warning" title={`Local AI server ${local.server} is not reachable`}>{local.error} Check STUDIO_LLM_BASE_URL and STUDIO_LLM_API_KEY in the helper .env file.</Alert>
+          ))}
           <p className="text-sm text-muted">
-            Jobs you start in the portal run on this computer, using your Claude account and your local framework folder.
+            Jobs you start in the portal run on this computer, using your Claude account or your local AI server, and your local framework folder.
             Model: <span className="font-medium text-ink-soft">{modelLabel(state.model.claudeModel)}</span>
             {state.model.lastModels.length > 0 && <> · last job ran on <span className="font-medium text-ink-soft">{describeModels(state.model.lastModels)}</span></>}.
             Change it with the <span className="font-medium text-ink-soft">Model</span> menu in the top bar.

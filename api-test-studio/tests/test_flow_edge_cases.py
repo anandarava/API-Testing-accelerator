@@ -118,14 +118,14 @@ def test_final_review_rechecks_only_the_changed_flows():
     assert rechecked - reviewed  # flows added from the reviewer's suggestions are
 
 
-def test_writer_model_is_used_only_for_writing_flow_steps(project, monkeypatch):
+def test_one_model_runs_every_step_of_a_job(project, monkeypatch):
     monkeypatch.setattr(claude, 'claude_command', lambda: ['claude'])
     lead, pid = project
     helper = pair_helper(lead)
     beat(helper)
-    assert lead.put('/api/me/preferences', json={'claudeModel': 'opus', 'writerModel': 'sonnet'}).json()['writerModel'] == 'sonnet'
-    assert lead.put('/api/me/preferences', json={'writerModel': 'gpt-4'}).status_code == 422
-    assert lead.get('/api/me/preferences').json()['claudeModel'] == 'opus'
+    # The separate writing model was removed; the old setting is no longer accepted.
+    assert lead.put('/api/me/preferences', json={'writerModel': 'sonnet'}).status_code == 422
+    assert 'writerModel' not in lead.put('/api/me/preferences', json={'claudeModel': 'opus'}).json()
     start_job(lead, pid)
     calls = []
 
@@ -135,14 +135,14 @@ def test_writer_model_is_used_only_for_writing_flow_steps(project, monkeypatch):
         return subprocess.CompletedProcess(args, 0, json.dumps(envelope), '')
 
     def handler(job_input, report, submit=None):
-        claude.run_agent('flow-designer', {}, Answer, cwd='.', runner=runner)
-        claude.run_agent('flow-case-writer', {}, Answer, cwd='.', runner=runner)
+        for agent in ('flow-designer', 'flow-case-writer', 'unit-case-writer', 'flow-reviewer'):
+            claude.run_agent(agent, {}, Answer, cwd='.', runner=runner)
         return {}
     from helper.claude import ClaudeStatus
     from helper.runner import Helper
     status = ClaudeStatus(installed=True, loggedIn=True)
     Helper(helper, log=lambda _: None, claude_status=lambda: status, handlers={'framework.analyze': handler}).run_once()
-    assert calls == ['opus', 'sonnet']
+    assert calls == ['opus'] * 4
 
 
 def test_missing_columns_are_added_to_an_older_database(tmp_path, monkeypatch):

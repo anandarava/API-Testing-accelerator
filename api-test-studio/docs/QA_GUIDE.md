@@ -27,8 +27,13 @@ team's Playwright framework repository with `npm install` already run.
    version not in the list can be typed under *Other model ID* (e.g. `claude-opus-4-8`). Which ones you
    can use depends on your Claude plan; if a model is not available, the job stops with a clear message. Running jobs keep the model they started with. The menu, running jobs and
    finished jobs show the model that actually ran (e.g. *Sonnet 5.5*; Claude Code may also use Haiku
-   for small helper tasks). Under *Writing flow steps* you can pick a cheaper model (Sonnet or Haiku) for
-   turning designed flows into detailed steps; design and review keep the main model.
+   for small helper tasks). The model you pick runs every step of the job: design, writing and review.
+
+6. **Use your team's local AI server instead of Claude (optional).** Copy `.env.example` to `.env` in the
+   `api-test-studio` folder, fill in the server address and API key your lead gives you, and restart the
+   helper. The **Model** menu then has a **Local server** tab: pick a model there to run your jobs on it,
+   or switch back to the **Claude** tab at any time. Local models are slower and less thorough than Claude,
+   so review their cases and scripts with extra care.
 
 The first person on a project also clicks **Analyze framework** once, reviews the profile Claude
 writes (test folder, fixtures, auth, conventions) and clicks **Looks right, confirm**.
@@ -158,6 +163,9 @@ with one sheet for unit cases and one for flows, ready to share.
 | --- | --- |
 | Chip says *Connect your computer* | Start the helper: `.venv\Scripts\python -m helper start` in the `api-test-studio` folder. |
 | *Claude not signed in* | Run `claude auth login`, then restart the helper. |
+| *Local server not reachable* | Check `STUDIO_LLM_BASE_URL` and `STUDIO_LLM_API_KEY` in `.env`, that you are on the office network or VPN, then restart the helper. `python -m helper status` shows the exact error. |
+| *not available for your API key* | Your local-server key cannot use that model. Pick another one under **Local server** in the Model menu. |
+| *too long for the local model's context window* | Generate fewer endpoints at once, raise `STUDIO_LLM_CONTEXT` if the server allows, or run this job on Claude. |
 | Job waits at *Waiting for the Local Helper* | The helper runs jobs for the person who started them — start **your** helper. |
 | *Different versions* message in the helper | Update your copy of API Test Studio to the same version as the portal. |
 | Script checks show *skipped* | Run `npm install` in your framework folder. |
