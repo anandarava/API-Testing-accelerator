@@ -32,6 +32,9 @@ CLAUDE_MODEL_CATALOG = (
 CLAUDE_MODELS = tuple(model_id for model_id, _, _ in CLAUDE_MODEL_CATALOG)
 # Any other full model id (for example a version released after this list was written).
 CUSTOM_MODEL_PATTERN = r'claude-[a-z]+-[0-9]+(-[0-9]+)*'
+# A model on the user's own OpenAI-compatible server (LiteLLM, Ollama), e.g. "local:qwen3.5:35b".
+LOCAL_MODEL_PREFIX = 'local:'
+LOCAL_MODEL_PATTERN = r'local:[A-Za-z0-9][A-Za-z0-9._:/-]{0,53}'
 
 
 class Strict(BaseModel):
@@ -72,10 +75,20 @@ class ClaudeStatus(Strict):
     error: str = ''
 
 
+class LocalLlmStatus(Strict):
+    """The helper's local AI server, if one is set up. The address and key stay on the helper's computer."""
+    configured: bool = False
+    reachable: bool = False
+    server: str = Field(default='', max_length=200, description='Host name of the server, without the key')
+    models: list[str] = Field(default_factory=list, max_length=30, description='Chat models the key may use')
+    error: str = Field(default='', max_length=300)
+
+
 class HelperHeartbeat(Strict):
     hostname: str = Field(default='', max_length=200)
     helperVersion: str = Field(default='', max_length=40)
     claude: ClaudeStatus
+    local: LocalLlmStatus = Field(default_factory=LocalLlmStatus)
 
 
 # --- Framework profile (output of the framework-analyzer agent) ----------

@@ -69,7 +69,7 @@ def analyze(job_input: dict, report, submit=None, agent=run_agent) -> dict:
     report('Checking your framework folder', 5)
     facts = scan(folder)
     count = facts.specFileCount
-    report(f'Claude is reading your framework ({count} existing test file{"" if count == 1 else "s"})', 15)
+    report(f'The AI is reading your framework ({count} existing test file{"" if count == 1 else "s"})', 15)
     task = {
         'goal': 'Build the framework profile that future test scripts must follow.',
         'frameworkRoot': 'The current working directory is the framework root. Use relative paths.',

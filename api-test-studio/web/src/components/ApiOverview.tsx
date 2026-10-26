@@ -1,5 +1,5 @@
 import { useMemo, useState, type ReactNode } from 'react';
-import { CircleAlert, CircleCheck, Search } from 'lucide-react';
+import { ChevronDown, CircleAlert, CircleCheck, Search } from 'lucide-react';
 import type { DomainModel, FlowCase, FlowGroupProgress, FlowsOverview, Job } from '../lib/api';
 import { timeAgo } from '../lib/format';
 import { Card, cx } from './ui';
@@ -380,6 +380,7 @@ export function ApiOverview({ analysis, operations, flows, job, onOpenFlow }:
   { analysis: Analysis; operations: Operations; flows: FlowCase[]; job: Job | null; onOpenFlow: (id: string) => void }) {
   const [tab, setTab] = useState<Tab>('coverage');
   const [fullSummary, setFullSummary] = useState(false);
+  const [open, setOpen] = useState(false);
   const categories = useCoverage(analysis);
   const { domain } = analysis;
   const generating = job?.status === 'running' || job?.status === 'queued';
@@ -466,10 +467,32 @@ export function ApiOverview({ analysis, operations, flows, job, onOpenFlow }:
     { key: 'rules', label: `Business rules · ${domain.businessRules.length}` },
     { key: 'records', label: `Records · ${domain.entities.length}` },
   ];
+  const counts = [areas.length && `${areas.length} business areas`, `${lifecycles} status lifecycles`,
+    `${domain.businessRules.length} business rules`, `${domain.entities.length} records`].filter(Boolean).join(' · ');
   return (
     <Card className="overflow-hidden">
-      <div className="px-5 pt-5 sm:px-6 sm:pt-6">
-        {header}
+      <button onClick={() => setOpen(!open)} aria-expanded={open}
+        className={cx('flex w-full cursor-pointer items-start gap-3 px-5 py-4 text-left hover:bg-canvas/60 sm:px-6', open && 'border-b border-line')}>
+        <ChevronDown className={cx('mt-0.5 size-4 shrink-0 text-muted transition-transform', !open && '-rotate-90')} />
+        <span className="min-w-0 flex-1">
+          <span className="block text-base font-semibold text-ink">API analysis & coverage</span>
+          <span className="mt-0.5 block text-sm text-muted">
+            How the AI understood your API, and how much of it the flows test · {timeAgo(analysis.generatedAt)}{analysis.generatedBy ? ` by ${analysis.generatedBy}` : ''}
+          </span>
+          {!open && <span className="mt-1.5 block text-xs text-ink-soft">{counts}</span>}
+        </span>
+        <span className="shrink-0 text-right">
+          <span className={cx('block text-2xl font-bold leading-tight tabular-nums', analysis.covered === analysis.total ? 'text-emerald-700' : 'text-ink')}>{percent}%</span>
+          <span className="block text-xs text-muted">covered · {analysis.covered} of {analysis.total}</span>
+        </span>
+      </button>
+      {open && <>
+      <div className="px-5 pt-5 sm:px-6">
+        <h2 className="text-sm font-semibold text-ink">How your API works</h2>
+        <p className="mt-1.5 max-w-3xl text-sm leading-relaxed text-ink-soft">
+          {longSummary && !fullSummary ? `${domain.summary.slice(0, 300).replace(/\s+\S*$/, '')}… ` : `${domain.summary} `}
+          {longSummary && <button onClick={() => setFullSummary(!fullSummary)} className="cursor-pointer font-medium text-brand-600 hover:underline">{fullSummary ? 'Show less' : 'Read more'}</button>}
+        </p>
         <div role="tablist" className="mt-5 flex gap-1 overflow-x-auto border-b border-line">
           {tabs.map((t) => (
             <button key={t.key} role="tab" aria-selected={tab === t.key} onClick={() => setTab(t.key)}
@@ -487,6 +510,7 @@ export function ApiOverview({ analysis, operations, flows, job, onOpenFlow }:
         {tab === 'rules' && <RulesTab analysis={analysis} flows={flows} onOpenFlow={onOpenFlow} />}
         {tab === 'records' && <RecordsTab domain={domain} />}
       </div>
+      </>}
     </Card>
   );
 }

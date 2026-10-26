@@ -6,6 +6,7 @@ usage), scores the results with the same code checks the portal uses, and compar
     .venv\\Scripts\\python -m evals.run_eval                       # Petstore, unit + flows + roles
     .venv\\Scripts\\python -m evals.run_eval --modules unit --endpoints 3 --model sonnet
     .venv\\Scripts\\python -m evals.run_eval --spec my-api.yaml --roles my-roles.csv
+    .venv\\Scripts\\python -m evals.run_eval --modules unit --model local:qwen3.5:35b   # local AI server from .env
 """
 import argparse
 import json
@@ -16,7 +17,7 @@ from pathlib import Path
 from contracts.coverage import gaps as unit_gaps, obligations
 from contracts.flows import dependencies, gaps as flow_gaps, operation_index, requirements, unproven_claims
 from contracts.roles import role_gaps, role_requirements
-from helper import claude, flow_cases, role_cases, unit_cases
+from helper import claude, config, flow_cases, role_cases, unit_cases
 from studio.documents import extract_text
 from studio.openapi import parse_spec
 
@@ -134,12 +135,12 @@ def main(argv=None):
     parser.add_argument('--roles', type=Path, default=HERE / 'petstore-roles.csv')
     parser.add_argument('--modules', default='unit,flows,roles', help='Comma separated: unit, flows, roles')
     parser.add_argument('--endpoints', type=int, default=5, help='How many endpoints for unit and role cases')
-    parser.add_argument('--model', default='', help='Claude model alias or id; empty = account default')
-    parser.add_argument('--writer-model', default='', help='Model for writing case details; empty = same model')
+    parser.add_argument('--model', default='', help='Claude model alias or id, or local:<model>; empty = account default')
     args = parser.parse_args(argv)
+    config.load_env()
     modules = {m.strip() for m in args.modules.split(',') if m.strip()}
     parsed = parse_spec(args.spec.read_text(encoding='utf-8'))
-    claude.job_model.begin(args.model or None, args.writer_model or None)
+    claude.job_model.begin(args.model or None)
     started = time.time()
     report = {'spec': args.spec.name, 'modules': sorted(modules), 'model': args.model or 'default', 'startedAt': started}
     if 'unit' in modules:

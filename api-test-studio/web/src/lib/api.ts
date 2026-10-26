@@ -60,9 +60,11 @@ export interface Member { userId: string; name: string; email: string; role: Rol
 export interface ActivityItem { id: string; action: string; summary: string; actorName: string; createdAt: number }
 
 export interface ClaudeStatus { installed: boolean; version: string; loggedIn: boolean; email: string; subscriptionType: string; error: string }
+/** The helper's own OpenAI-compatible AI server (from its .env file). */
+export interface LocalLlmStatus { configured: boolean; reachable: boolean; server: string; models: string[]; error: string }
 
 export interface ModelOption { id: string; label: string; family: string }
-export interface ModelPreferences { claudeModel: string; writerModel: string; lastModels: string[]; lastUsedAt: number | null; options: ModelOption[] }
+export interface ModelPreferences { claudeModel: string; lastModels: string[]; lastUsedAt: number | null; options: ModelOption[] }
 
 export interface HelperState {
   model: ModelPreferences;
@@ -72,6 +74,7 @@ export interface HelperState {
   hostname: string;
   helperVersion: string;
   claude: ClaudeStatus | null;
+  local: LocalLlmStatus | null;
 }
 
 export interface Spec {

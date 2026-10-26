@@ -60,7 +60,19 @@ such as `opus` that always means the newest version, or a pinned version such as
 is `CLAUDE_MODEL_CATALOG` in `contracts/__init__.py`, and any other full model id can be typed in). The helper passes it as `--model` to every Claude call of the jobs that user starts,
 records the models Claude Code reports (`modelUsage`), and the portal shows them on jobs and in the menu.
 
-`python -m helper status` shows the pairing and Claude sign-in state. Pairing again replaces the
+**Local AI server (optional).** Instead of Claude, a user can run jobs on their team's own
+OpenAI-compatible server (LiteLLM, Ollama, vLLM). Copy `.env.example` to `.env` in the `api-test-studio`
+folder of each QA computer and fill in `STUDIO_LLM_BASE_URL` and `STUDIO_LLM_API_KEY` (`.env` is gitignored;
+the key never leaves that computer and is not passed to Claude Code or Node). The helper lists the
+server's chat models, and the **Model** menu then has a **Local server** tab; the choice is stored as
+`local:<model>` (e.g. `local:qwen3.5:35b`), and that model runs every step of the user's jobs. `helper/local_llm.py` sends the same agent instructions, skills and JSON schemas through
+`/v1/chat/completions`. It turns thinking off, asks for a 64k context window (`num_ctx`), and corrects
+invalid JSON up to twice. For the script and framework agents it runs a read-only `read_file` / `glob` / `grep`
+tool loop inside the framework folder (`.env`, `*.pem`, `*.key` blocked). Tuning: `STUDIO_LLM_CONTEXT`,
+`STUDIO_LLM_TIMEOUT`, `STUDIO_LLM_CONCURRENCY` (parallel requests, default 2), `STUDIO_LLM_THINKING=true`.
+Compare quality with `python -m evals.run_eval --modules unit --model local:qwen3.5:35b`.
+
+`python -m helper status` shows the pairing, Claude sign-in and local AI server state. Pairing again replaces the
 previous computer; **Disconnect** in the portal revokes it.
 
 ## Roles

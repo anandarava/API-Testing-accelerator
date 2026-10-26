@@ -7,7 +7,8 @@ from pydantic import BaseModel, ConfigDict, Field, ValidationError
 from sqlalchemy import delete, select
 from sqlalchemy.orm import Session as DbSession
 
-from contracts import CLAUDE_MODEL_CATALOG, CLAUDE_MODELS, CUSTOM_MODEL_PATTERN, VERSION, HelperHeartbeat, JobUsage
+from contracts import (CLAUDE_MODEL_CATALOG, CLAUDE_MODELS, CUSTOM_MODEL_PATTERN, LOCAL_MODEL_PATTERN, VERSION, HelperHeartbeat,
+                       JobUsage)
 from contracts.fingerprint import CONTRACT_FINGERPRINT
 from contracts.flows import FlowProgress
 
@@ -38,11 +39,14 @@ class ProgressInput(BaseModel):
     usage: JobUsage | None = None
 
 
+MODEL_CHOICES = '|'.join(CLAUDE_MODELS) + '|' + CUSTOM_MODEL_PATTERN + '|' + LOCAL_MODEL_PATTERN
+
+
 class PreferencesInput(BaseModel):
     model_config = ConfigDict(extra='forbid')
-    claudeModel: str | None = Field(default=None, max_length=60, pattern='^(' + '|'.join(CLAUDE_MODELS) + '|' + CUSTOM_MODEL_PATTERN + ')$')
-    writerModel: str | None = Field(default=None, max_length=60, description="Model that writes flow steps; '' = same as claudeModel",
-                                    pattern='^(|' + '|'.join(CLAUDE_MODELS) + '|' + CUSTOM_MODEL_PATTERN + ')$')
+    claudeModel: str | None = Field(default=None, max_length=60, pattern=f'^({MODEL_CHOICES})$',
+                                    description="A Claude model, or local:<model> on the helper's local AI server. "
+                                                'Every step of a job runs on it.')
 
 
 class CompleteInput(BaseModel):
@@ -60,7 +64,7 @@ class FailInput(BaseModel):
 
 
 def preference(db: DbSession, user_id: str) -> UserPreference:
-    return db.get(UserPreference, user_id) or UserPreference(user_id=user_id, claude_model='default', writer_model='', last_models=[])
+    return db.get(UserPreference, user_id) or UserPreference(user_id=user_id, claude_model='default', last_models=[])
 
 
 def remember_models(db: DbSession, user_id: str, models: list[str]):
@@ -72,7 +76,7 @@ def remember_models(db: DbSession, user_id: str, models: list[str]):
 
 
 def preferences_json(pref: UserPreference) -> dict:
-    return {'claudeModel': pref.claude_model, 'writerModel': pref.writer_model or '', 'lastModels': pref.last_models or [],
+    return {'claudeModel': pref.claude_model, 'lastModels': pref.last_models or [],
             'lastUsedAt': pref.last_used_at,
             'options': [{'id': model_id, 'label': label, 'family': family} for model_id, label, family in CLAUDE_MODEL_CATALOG]}
 
@@ -85,6 +89,7 @@ def helper_state(db: DbSession, user_id: str) -> dict:
     return {'paired': paired, 'connected': connected, 'lastSeen': status.last_seen if status else None,
             'hostname': status.hostname if status else '', 'helperVersion': status.helper_version if status else '',
             'claude': status.claude if status and connected else None,
+            'local': (status.local_llm or None) if status and connected else None,
             'model': preferences_json(preference(db, user_id))}
 
 
@@ -113,8 +118,6 @@ def update_preferences(body: PreferencesInput, db: DbSession = Depends(get_db), 
     pref = preference(db, user.id)
     if body.claudeModel is not None:
         pref.claude_model = body.claudeModel
-    if body.writerModel is not None:
-        pref.writer_model = body.writerModel
     db.merge(pref)
     db.commit()
     return preferences_json(preference(db, user.id))
@@ -161,6 +164,7 @@ def heartbeat(body: HelperHeartbeat, db: DbSession = Depends(get_db), user: User
     status = db.get(HelperStatus, user.id) or HelperStatus(user_id=user.id)
     status.last_seen, status.hostname, status.helper_version = time.time(), body.hostname, body.helperVersion
     status.claude = body.claude.model_dump()
+    status.local_llm = body.local.model_dump()
     db.merge(status)
     db.commit()
     return {'ok': True, 'serverVersion': VERSION, 'contracts': CONTRACT_FINGERPRINT}
@@ -191,12 +195,12 @@ def claim(db: DbSession = Depends(get_db), user: User = Depends(helper_user)):
         job.started_at = job.started_at or now
         # The model chosen when the job starts is the one it runs on, even if the user switches later.
         pref = preference(db, user.id)
-        model, writer = pref.claude_model, pref.writer_model or ''
-        job.input = {**job.input, 'claudeModel': model, 'writerModel': writer}
+        model = pref.claude_model
+        job.input = {**job.input, 'claudeModel': model}
         project = db.get(Project, job.project_id)
         db.commit()
         return {'job': {'id': job.id, 'kind': job.kind, 'projectId': job.project_id, 'projectName': project.name,
-                        'input': job.input, 'attempt': job.attempts, 'model': model, 'writerModel': writer}}
+                        'input': job.input, 'attempt': job.attempts, 'model': model}}
     db.commit()
     return {'job': None}
 

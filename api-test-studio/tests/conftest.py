@@ -7,6 +7,9 @@ _TMP = tempfile.mkdtemp(prefix='studio-tests-')
 os.environ['STUDIO_DATA_DIR'] = _TMP
 os.environ['STUDIO_DATABASE_URL'] = 'sqlite:///' + Path(_TMP, 'test.db').as_posix()
 os.environ['STUDIO_HELPER_HOME'] = str(Path(_TMP, 'helper'))
+# Tests never talk to a real local AI server, even when the developer's shell has one set up.
+for _name in [name for name in os.environ if name.startswith('STUDIO_LLM_')]:
+    del os.environ[_name]
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 import pytest  # noqa: E402

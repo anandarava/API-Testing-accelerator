@@ -36,7 +36,7 @@ def regenerate_unit(job_input: dict, agent, workspace) -> dict:
     cases = agent('unit-case-writer', task, CaseSet, cwd=workspace, max_turns=4)['cases']
     match = next((c for c in cases if c['scenarioKey'] == key), None)
     if not match:
-        raise ClaudeError('Claude did not return the regenerated case.')
+        raise ClaudeError('The AI did not return the regenerated case.')
     return match
 
 
@@ -61,7 +61,7 @@ def regenerate_flow(job_input: dict, agent, workspace) -> dict:
         flows = agent('flow-case-writer', task, FlowCaseSet, cwd=workspace, max_turns=4)['flows']
         match = next((f for f in flows if f['flowKey'] == key), None)
         if not match:
-            raise ClaudeError('Claude did not return the regenerated flow.')
+            raise ClaudeError('The AI did not return the regenerated flow.')
         problems = validate_detailed_flow(match, operations)
         if not problems:
             return match
@@ -70,7 +70,7 @@ def regenerate_flow(job_input: dict, agent, workspace) -> dict:
 
 def generate(job_input: dict, report, submit=None, agent=run_agent) -> dict:
     label = job_input['case']['code']
-    report(f'Claude is rewriting {label}', 10)
+    report(f'The AI is rewriting {label}', 10)
     with tempfile.TemporaryDirectory(prefix='studio-regenerate-') as workspace:
         if job_input['module'] == 'unit':
             result = {'caseId': job_input['caseId'], 'unitCase': regenerate_unit(job_input, agent, workspace)}
