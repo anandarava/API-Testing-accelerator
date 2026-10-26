@@ -1,0 +1,31 @@
+# Dependencies and build output
+node_modules/
+.venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+api-test-studio/web/dist/
+
+# Local data, secrets and machine-specific files
+.env
+.env.*
+!.env.example
+*.db
+*.db-wal
+*.db-shm
+*.pem
+*.key
+
+# Test and tool output
+apitesting/reports/
+apitesting/test-results/
+playwright-report/
+api-test-studio/evals/results/
+.playwright-mcp/
+.api-test-studio/
+
+# Editors and OS
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db

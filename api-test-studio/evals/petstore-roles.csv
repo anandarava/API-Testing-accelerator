@@ -1,0 +1,4 @@
+role,description,can do,cannot do
+Customer,Buys pets,"browse pets, place orders, read their own orders","create, update or delete pets; read other customers' orders"
+Clerk,Runs the shop,"create and update pets, read all orders","delete pets, place orders"
+Owner,Owns the shop,everything,

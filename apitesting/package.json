@@ -1,0 +1,30 @@
+{
+  "name": "apitesting",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Playwright + TypeScript API testing framework",
+  "scripts": {
+    "test": "playwright test",
+    "test:unit": "playwright test tests/api",
+    "test:flows": "playwright test tests/flows",
+    "test:smoke": "playwright test --grep @smoke",
+    "test:list": "playwright test --list",
+    "mock": "node mock/petstore-mock.mjs",
+    "typecheck": "tsc --noEmit",
+    "lint": "eslint .",
+    "check": "npm run typecheck && npm run lint && npm run test:list",
+    "report": "playwright show-report reports/html"
+  },
+  "devDependencies": {
+    "@eslint/js": "9.39.5",
+    "@playwright/test": "1.58.2",
+    "@types/node": "22.20.5",
+    "ajv": "8.20.0",
+    "ajv-formats": "3.0.1",
+    "dotenv": "17.4.2",
+    "eslint": "9.39.5",
+    "typescript": "5.9.3",
+    "typescript-eslint": "8.72.0",
+    "yaml": "2.9.1"
+  }
+}

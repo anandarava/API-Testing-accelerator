@@ -1,0 +1,7 @@
+.venv/
+__pycache__/
+.pytest_cache/
+web/node_modules/
+web/dist/
+examples/sample-playwright-framework/node_modules/
+.api-test-studio/
