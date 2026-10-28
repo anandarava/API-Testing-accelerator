@@ -7,10 +7,11 @@ import { Card, cx } from './ui';
 type Analysis = NonNullable<FlowsOverview['analysis']>;
 type Requirement = Analysis['requirements'][number];
 type Operations = FlowsOverview['operations'];
-type Category = 'operation' | 'dependency' | 'lifecycle' | 'business_rule' | 'locked_state' | 'side_effect';
-type Tab = 'coverage' | 'areas' | 'lifecycles' | 'rules' | 'records';
+type Category = 'process' | 'operation' | 'dependency' | 'lifecycle' | 'business_rule' | 'locked_state' | 'side_effect';
+type Tab = 'coverage' | 'processes' | 'areas' | 'lifecycles' | 'rules' | 'records';
 
 const CATEGORIES: { key: Category; label: string; hint: string; filter: string }[] = [
+  { key: 'process', label: 'Business processes end to end', hint: 'Each business process has a flow from start to outcome', filter: 'Processes' },
   { key: 'operation', label: 'API operations used', hint: 'Each endpoint is called in a flow', filter: 'Operations' },
   { key: 'dependency', label: 'IDs passed between steps', hint: 'An ID from one call is used by a later call', filter: 'IDs' },
   { key: 'lifecycle', label: 'Status changes tested', hint: 'A record moves from one status to the next', filter: 'Status changes' },
@@ -24,7 +25,7 @@ const RULE_KIND: Record<string, string> = {
 };
 const KIND: Record<string, string> = {
   operation: 'Operation', dependency: 'ID hand-off', lifecycle: 'Status change', business_rule: 'Business rule',
-  locked_state: 'Locked record', side_effect: 'Side effect',
+  locked_state: 'Locked record', side_effect: 'Side effect', process: 'Business process',
 };
 const PAGE = 50;
 
@@ -246,7 +247,7 @@ function CoverageTab({ analysis, operations, flows, onOpenFlow }: { analysis: An
           </ul>
           <p className="mt-2 text-sm text-ink-soft">
             {missing.length > 6 && <><button onClick={() => setFilter('missing')} className="cursor-pointer font-medium text-brand-700 hover:underline">See all {missing.length}</button> · </>}
-            Use <span className="font-semibold">Redesign flows</span> to close them.
+            Use <span className="font-semibold">Design flows → Fill gaps</span> to close them without changing existing flows.
           </p>
         </div>
       )}
@@ -299,6 +300,75 @@ function CoverageTab({ analysis, operations, flows, onOpenFlow }: { analysis: An
           {visible.length > limit && <> · <button onClick={() => setLimit(limit + PAGE)} className="cursor-pointer font-medium text-brand-600 hover:underline">Show more</button></>}
         </p>
       </div>
+    </div>
+  );
+}
+
+/** Whether a flow makes the process's calls in this order (other calls may come between), as the coverage check does. */
+function followsProcess(flowOps: string[], steps: string[]): boolean {
+  let next = 0;
+  for (const op of flowOps) if (next < steps.length && op === steps[next]) next += 1;
+  return next === steps.length;
+}
+
+function ProcessesTab({ analysis, operations, flows, onOpenFlow }: { analysis: Analysis; operations: Operations; flows: FlowCase[]; onOpenFlow: (id: string) => void }) {
+  const { domain } = analysis;
+  const covered = new Map(analysis.requirements.map((r) => [r.id, r.covered]));
+  const required = new Map(analysis.requirements.map((r) => [r.id, r.check?.sequence]));
+  const areaOf = new Map((domain.areas ?? []).flatMap((a) => a.operations.map((op) => [op, a.name] as const)));
+  const processes = domain.processes ?? [];
+  const missing = processes.filter((p) => !covered.get(`process:${p.key}`)).length;
+  return (
+    <div className="space-y-3">
+      <p className="text-sm text-muted">
+        Every business process needs an end-to-end flow that makes its <span className="font-medium text-ink-soft">key calls</span> (highlighted) in this order and ends with the outcome; the other calls are optional look-ups.{' '}
+        {missing ? <span className="font-medium text-amber-800">{missing} of {processes.length} have no end-to-end flow yet.</span>
+          : <span className="font-medium text-emerald-700">All {processes.length} are covered.</span>}
+      </p>
+      <ul className="divide-y divide-line overflow-hidden rounded-xl border border-line">
+        {processes.map((process) => {
+          const id = `process:${process.key}`;
+          const sequence = required.get(id) ?? process.steps;
+          const key = new Set(sequence);
+          const by = flows.filter((f) => followsProcess(f.content.operations ?? f.content.steps.map((s) => s.operationId), sequence));
+          const reached = [...new Set(process.steps.map((op) => areaOf.get(op)).filter(Boolean))];
+          return (
+            <li key={process.key} className="space-y-2 px-4 py-3">
+              <div className="flex flex-col gap-1.5 sm:flex-row sm:items-start sm:gap-3">
+                <span className="flex items-start gap-2.5 sm:flex-1">
+                  {covered.get(id) ? <CircleCheck className="mt-0.5 size-4 shrink-0 text-emerald-600" aria-label="Covered" /> : <CircleAlert className="mt-0.5 size-4 shrink-0 text-amber-600" aria-label="Not covered" />}
+                  <span className="min-w-0">
+                    <span className="block text-sm font-semibold text-ink">{process.name}</span>
+                    {process.description && <span className="block text-sm text-ink-soft">{process.description}</span>}
+                    <span className="mt-0.5 block text-xs text-muted">
+                      {process.actors.length > 0 && <>{process.actors.join(', ')} · </>}{reached.length} area{reached.length === 1 ? '' : 's'}: {reached.join(' → ')}
+                    </span>
+                  </span>
+                </span>
+                <span className="flex flex-wrap gap-1 pl-[26px] sm:pl-0">
+                  {by.slice(0, 4).map((f) => (
+                    <button key={f.id} onClick={() => onOpenFlow(f.id)} title={f.title}
+                      className="cursor-pointer rounded-md bg-brand-50 px-2 py-0.5 text-xs font-medium text-brand-700 hover:bg-brand-100">{f.code}</button>
+                  ))}
+                  {by.length > 4 && <span className="px-1 text-xs text-muted">+{by.length - 4}</span>}
+                </span>
+              </div>
+              <div className="flex flex-wrap items-center gap-1 pl-[26px]">
+                {process.steps.map((op, i) => (
+                  <span key={`${op}-${i}`} className="flex items-center gap-1">
+                    {i > 0 && <span className="text-faint">→</span>}
+                    <span title={key.has(op) ? `${op} (key call)` : `${op} (optional look-up)`}
+                      className={cx('rounded px-1.5 py-0.5 font-mono text-[11px]', key.has(op) ? 'bg-brand-50 font-semibold text-brand-700' : 'bg-canvas text-muted')}>
+                      {operations[op] ? `${operations[op].method} ${operations[op].path}` : op}
+                    </span>
+                  </span>
+                ))}
+              </div>
+              {process.outcome && <p className="pl-[26px] text-xs text-muted">Outcome: {process.outcome}</p>}
+            </li>
+          );
+        })}
+      </ul>
     </div>
   );
 }
@@ -386,6 +456,7 @@ export function ApiOverview({ analysis, operations, flows, job, onOpenFlow }:
   const generating = job?.status === 'running' || job?.status === 'queued';
   const groups = generating ? job?.progress.detail?.groups : undefined;
   const areas = domain.areas ?? [];
+  const processes = domain.processes ?? [];
   const lifecycles = domain.entities.filter((e) => e.states.length > 1 || domain.transitions.some((t) => t.entity === e.name)).length;
   const percent = analysis.total ? Math.round((100 * analysis.covered) / analysis.total) : 100;
   const finishedAreas = groups?.filter((g) => g.status === 'done' || g.status === 'failed').length ?? 0;
@@ -462,12 +533,13 @@ export function ApiOverview({ analysis, operations, flows, job, onOpenFlow }:
 
   const tabs: { key: Tab; label: string }[] = [
     { key: 'coverage', label: `Coverage · ${percent}%` },
+    ...(processes.length ? [{ key: 'processes' as Tab, label: `Business processes · ${processes.length}` }] : []),
     ...(areas.length ? [{ key: 'areas' as Tab, label: `Business areas · ${areas.length}` }] : []),
     { key: 'lifecycles', label: `Status lifecycles · ${lifecycles}` },
     { key: 'rules', label: `Business rules · ${domain.businessRules.length}` },
     { key: 'records', label: `Records · ${domain.entities.length}` },
   ];
-  const counts = [areas.length && `${areas.length} business areas`, `${lifecycles} status lifecycles`,
+  const counts = [processes.length && `${processes.length} business processes`, areas.length && `${areas.length} business areas`, `${lifecycles} status lifecycles`,
     `${domain.businessRules.length} business rules`, `${domain.entities.length} records`].filter(Boolean).join(' · ');
   return (
     <Card className="overflow-hidden">
@@ -505,6 +577,7 @@ export function ApiOverview({ analysis, operations, flows, job, onOpenFlow }:
       </div>
       <div className="p-5 sm:p-6" role="tabpanel">
         {tab === 'coverage' && <CoverageTab analysis={analysis} operations={operations} flows={flows} onOpenFlow={onOpenFlow} />}
+        {tab === 'processes' && <ProcessesTab analysis={analysis} operations={operations} flows={flows} onOpenFlow={onOpenFlow} />}
         {tab === 'areas' && <Areas domain={domain} flows={flows} />}
         {tab === 'lifecycles' && <Lifecycles domain={domain} />}
         {tab === 'rules' && <RulesTab analysis={analysis} flows={flows} onOpenFlow={onOpenFlow} />}

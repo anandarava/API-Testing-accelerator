@@ -6,19 +6,21 @@ import time
 
 import httpx
 
-from contracts import VERSION, HelperHeartbeat
+from contracts import ASSISTANT_KINDS, VERSION, HelperHeartbeat
 from contracts.fingerprint import CONTRACT_FINGERPRINT
 
-from . import claude, config, flow_cases, framework, local_llm, regenerate, role_cases, scripts, unit_cases
+from . import assistant, claude, config, flow_cases, framework, local_llm, regenerate, role_cases, scripts, unit_cases
 
 HEARTBEAT_SECONDS = 10
 CLAUDE_REFRESH_SECONDS = 60
 CLAIM_SECONDS = 3
+ASSISTANT_CLAIM_SECONDS = 1  # questions should feel quick
 LEASE_RENEW_SECONDS = 30
 
 HANDLERS = {'framework.analyze': framework.analyze, 'unit.generate': unit_cases.generate, 'scripts.generate': scripts.generate,
             'flows.generate': flow_cases.generate, 'case.regenerate': regenerate.generate,
-            'access.analyze': role_cases.analyze, 'roles.generate': role_cases.generate}
+            'access.analyze': role_cases.analyze, 'roles.generate': role_cases.generate,
+            'assistant.message': assistant.answer}
 
 
 class PairingRevoked(RuntimeError):
@@ -42,8 +44,12 @@ def check(response: httpx.Response) -> httpx.Response:
 
 
 class Helper:
-    def __init__(self, client: httpx.Client, log=print, handlers=None, claude_status=claude.status, local_status=local_llm.status):
-        self.client, self.log = client, log
+    """Claims and runs jobs. The ``main`` lane runs generation jobs one at a time; the ``assistant`` lane answers
+    project-assistant messages in parallel with it, each with its own model and usage."""
+
+    def __init__(self, client: httpx.Client, log=print, handlers=None, claude_status=claude.status, local_status=local_llm.status,
+                 lane: str = 'main'):
+        self.client, self.log, self.lane = client, log, lane
         self.handlers = handlers or HANDLERS
         self.claude_status, self.local_status = claude_status, local_status
         self._status, self._local, self._status_at, self._beat_at = None, None, 0.0, 0.0
@@ -69,8 +75,9 @@ class Helper:
 
     def run_once(self) -> bool:
         """Claim and run at most one job. Returns True when a job was processed."""
-        self.heartbeat()
-        job = check(self.client.post('/api/helper/jobs/claim')).json()['job']
+        if self.lane == 'main':
+            self.heartbeat()
+        job = check(self.client.post('/api/helper/jobs/claim', params={'lane': self.lane})).json()['job']
         if not job:
             return False
         self.process(job)
@@ -80,12 +87,13 @@ class Helper:
         job_id, kind = job['id'], job['kind']
         model = job.get('model') or 'default'
         self.log(f'> {kind} for project "{job.get("projectName", "")}" on model: {model}')
-        claude.job_model.begin(model)
-        state = {'message': 'Starting', 'percent': 0, 'models': [], 'usage': claude.job_model.usage()}
+        meter = claude.job_model if self.lane == 'main' else claude.JobModel()
+        meter.begin(model)
+        state = {'message': 'Starting', 'percent': 0, 'models': [], 'usage': meter.usage()}
         stop = threading.Event()
 
         def report(message, percent=None, detail=None):
-            state.update(message=message, percent=percent, models=claude.job_model.models(), usage=claude.job_model.usage())
+            state.update(message=message, percent=percent, models=meter.models(), usage=meter.usage())
             if detail is not None:
                 state['detail'] = detail
             self.log(f'  {message}')
@@ -97,7 +105,7 @@ class Helper:
         def keep_lease():
             while not stop.wait(LEASE_RENEW_SECONDS):
                 try:
-                    state.update(models=claude.job_model.models(), usage=claude.job_model.usage())
+                    state.update(models=meter.models(), usage=meter.usage())
                     self.client.post(f'/api/helper/jobs/{job_id}/progress', json=state)
                 except httpx.HTTPError:
                     pass
@@ -123,10 +131,11 @@ class Helper:
             handler = self.handlers.get(kind)
             if not handler:
                 raise RuntimeError(f'This helper version cannot run "{kind}" jobs. Update the Local Helper.')
-            result = handler(job['input'], report, submit=submit)
-            used = claude.job_model.models()
+            extra = {'meter': meter} if kind in ASSISTANT_KINDS else {}
+            result = handler(job['input'], report, submit=submit, **extra)
+            used = meter.models()
             check(self.client.post(f'/api/helper/jobs/{job_id}/complete',
-                                   json={'result': result, 'models': used, 'usage': claude.job_model.usage()}))
+                                   json={'result': result, 'models': used, 'usage': meter.usage()}))
             self.log(f"  Done. AI ran on: {', '.join(used) or 'no AI call was needed'}")
         except (PairingRevoked, VersionMismatch):
             raise
@@ -134,8 +143,8 @@ class Helper:
             message = str(exc) or exc.__class__.__name__
             self.log(f'  Failed: {message}')
             try:
-                self.client.post(f'/api/helper/jobs/{job_id}/fail', json={'error': message[:4000], 'models': claude.job_model.models(),
-                                                                       'usage': claude.job_model.usage()})
+                self.client.post(f'/api/helper/jobs/{job_id}/fail', json={'error': message[:4000], 'models': meter.models(),
+                                                                       'usage': meter.usage()})
             except httpx.HTTPError:
                 pass
         finally:
@@ -147,7 +156,7 @@ class Helper:
         while True:
             try:
                 if not self.run_once():
-                    time.sleep(CLAIM_SECONDS)
+                    time.sleep(CLAIM_SECONDS if self.lane == 'main' else ASSISTANT_CLAIM_SECONDS)
                 if backoff:
                     self.log('Reconnected to the portal.')
                 backoff = 0

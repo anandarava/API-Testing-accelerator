@@ -1,0 +1,20 @@
+flowchart TD
+    A(["QA uploads the roles file"]) --> B["<b>Read the roles file and the API;<br/>build the permission grid</b><br/>Agent: access-control-analyst<br/>Skills: none"]
+    B --> C["QA confirms the unknown cells<br/>allowed / own records only / denied"]
+    C --> D(["QA selects endpoints and clicks Generate"])
+    D --> E["Portal adds each endpoint's positive unit case<br/>Local Helper picks up the job, up to 5 endpoints at a time"]
+    E --> F["<b>Build the role checklist</b><br/><i>Code, no AI</i><br/>each allowed role succeeds, each denied role<br/>is refused, own records only, data rules"]
+    F --> G{"Positive unit case exists?"}
+    G -- Yes --> H["<b>Build allowed and denied cases<br/>from the unit case</b><br/><i>Code, no AI</i>"]
+    H --> I{"Checklist covered and<br/>no special rules?"}
+    I -- Yes --> Z
+    I -- No --> J
+    G -- No --> J["<b>Design the role cases</b><br/>Agent: role-case-designer<br/>Skills: api-access-control-testing, api-test-data"]
+    J --> K{"Code checks pass and<br/>every role covered?"}
+    K -- "No: fix once,<br/>then drop broken cases" --> J
+    K -- Yes --> L["<b>Review the role cases</b><br/>Agent: role-case-reviewer<br/>Skills: api-access-control-testing"]
+    L --> M{"Blocker or major findings?"}
+    M -- Yes --> N["<b>Revise the cases</b><br/>Agent: role-case-designer<br/>Skills: api-access-control-testing, api-test-data"]
+    N --> N2["<b>Re-review the changed cases</b><br/>Agent: role-case-reviewer<br/>Skills: api-access-control-testing"]
+    N2 --> Z
+    M -- No --> Z(["Portal saves the cases as In review"])

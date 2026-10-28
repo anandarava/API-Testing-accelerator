@@ -93,6 +93,16 @@ def test_writer_output_is_checked_and_only_failing_flows_are_retried():
     assert 'before any earlier step captures it' in fake.writer_tasks[1]['previousProblems']['F01'][0]
 
 
+def test_a_successful_step_must_check_its_body():
+    from contracts.cases import validate_detailed_flow
+    by_id = {e['operationId']: e for e in ENDPOINTS}
+    flow = detailed(outline('F01', [CREATE, step('S2', 'getPet', 200, inputs=[('path.petId', 'steps.S1.petId')])]))
+    assert validate_detailed_flow(flow, by_id) == []
+    flow['steps'][1]['expected'] = {**flow['steps'][1]['expected'], 'responseSchema': 'none', 'bodyChecks': []}
+    problems = validate_detailed_flow(flow, by_id)
+    assert len(problems) == 2 and all(p.startswith('S2: the 200 response has a documented body') for p in problems)
+
+
 def test_writer_batches_are_sized_by_steps():
     long = [outline(f'F0{i}', [step(f'S{n}', 'getPet', 200) for n in range(1, 31)]) for i in range(1, 4)]
     short = [outline(f'F1{i}', [CREATE, step('S2', 'getPet', 200)]) for i in range(7)]
@@ -116,6 +126,19 @@ def test_final_review_rechecks_only_the_changed_flows():
     reviewed, rechecked = set().union(*map(set, first)), set().union(*map(set, rechecks))
     assert rechecks and reviewed - rechecked  # flows the reviewer did not flag are not reviewed a second time
     assert rechecked - reviewed  # flows added from the reviewer's suggestions are
+
+
+def test_majors_that_come_back_after_the_re_review_get_a_second_fix():
+    fake = FakeFlowClaude()  # its reviewer flags the first flow as major every time, the re-review included
+    job_input = {'api': {}, 'endpoints': [{'id': e['operationId'], 'details': e} for e in ENDPOINTS]}
+    flow_cases.generate(job_input, lambda *a: None, lambda r: None, agent=fake)
+
+    def count(agent, mode, scope='Pets'):
+        return sum(1 for c in fake.calls if c == (agent, mode, scope))
+    groups = sum(1 for agent, mode, _ in fake.calls if (agent, mode) == ('flow-reviewer', 'review'))
+    assert count('flow-case-writer', 'revise', 'all') == flow_cases.MAX_FIX_ROUNDS * groups  # the writer's task has no scope
+    assert count('flow-reviewer', 'recheck') == flow_cases.MAX_FIX_ROUNDS  # and no more, even though the major stays
+    assert count('flow-designer', 'add-suggested') == 1  # a re-review's new suggestions are reported, not added
 
 
 def test_one_model_runs_every_step_of_a_job(project, monkeypatch):

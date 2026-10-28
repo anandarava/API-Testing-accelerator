@@ -9,7 +9,7 @@ from contracts import VERSION
 
 from . import config
 from .db import init_db
-from .routers import auth, cases, flows, framework, helper, jobs, projects, roles, scripts, specs, unit
+from .routers import assistant, auth, cases, flows, framework, helper, jobs, projects, roles, scripts, specs, unit
 
 
 @asynccontextmanager
@@ -19,7 +19,7 @@ async def lifespan(_app):
 
 
 app = FastAPI(title='API Test Studio', version=VERSION, lifespan=lifespan)
-for module in (auth, projects, specs, framework, unit, flows, roles, scripts, cases, helper, jobs):
+for module in (auth, projects, specs, framework, unit, flows, roles, scripts, cases, helper, jobs, assistant):
     app.include_router(module.router)
 
 

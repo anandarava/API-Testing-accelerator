@@ -74,11 +74,18 @@ def test_coverage_from_structure_and_covers():
                        'transition:Pet:available->pending', 'rule:R1'}
 
 
+def success(status):
+    """What a writer must expect: a 2xx checks its body, anything else only the status."""
+    if 200 <= status < 300:
+        return {'status': status, 'responseSchema': 'success', 'bodyChecks': [{'path': '$.id', 'check': 'exists'}],
+                'headers': {}, 'notes': ''}
+    return {'status': status, 'responseSchema': 'none', 'bodyChecks': [], 'headers': {}, 'notes': ''}
+
+
 def detailed(o, ops=None):
     steps = [{'key': s['key'], 'operationId': s['operationId'], 'purpose': s['purpose'],
               'request': {'auth': 'valid', 'pathParams': {}, 'query': {}, 'headers': {}, 'body': None, 'bodyNote': ''},
-              'expected': {'status': s['expectedStatus'], 'responseSchema': 'none', 'bodyChecks': [], 'headers': {}, 'notes': ''},
-              'captures': s['captures']} for s in o['steps']]
+              'expected': success(s['expectedStatus']), 'captures': s['captures']} for s in o['steps']]
     if ops:
         steps = [{**st, 'operationId': op} for st, op in zip(steps, ops)]
     return {'flowKey': o['key'], 'title': o['title'], 'objective': o['goal'], 'type': o['type'], 'priority': o['priority'],
@@ -95,6 +102,8 @@ STORE = outline('F03', [
 ], title='Order lookup')
 JOURNEY = outline('F09', ORDER['steps'][:3], covers=['transition:Pet:available->pending', 'rule:R1'], title='Order journey',
                   type='end_to_end')
+PROCESS = {'key': 'P1', 'name': 'Customer orders a pet', 'actors': ['Customer'], 'description': 'A new pet is ordered and the order is read back.',
+           'steps': ['createPet', 'placeOrder', 'getOrder'], 'outcome': 'The order exists for the pet'}
 
 
 class FakeFlowClaude:
@@ -118,6 +127,8 @@ class FakeFlowClaude:
             self.calls.append((agent, task.get('mode'), scope))
         if agent == 'flow-domain-analyst':
             return {**DOMAIN, 'areas': AREAS if self.areas else []}
+        if agent == 'flow-process-analyst':
+            return {'processes': [PROCESS]}
         if agent == 'flow-designer':
             mode = task['mode']
             if mode == 'plan':
@@ -171,7 +182,9 @@ def test_pipeline_designs_areas_and_journeys_in_parallel_then_fills_gaps():
     designer = [(mode, scope) for agent, mode, scope in fake.calls if agent == 'flow-designer']
     assert ('plan', flow_cases.JOURNEYS) in designer and ('plan', 'Pets') in designer and ('plan', 'Store') in designer
     assert ('fix', 'Pets') in designer and ('add-suggested', 'Pets') in designer and ('fill-gaps', 'all') in designer
-    assert submitted[-1]['review']['verdict'] == 'needs_attention' and 'Pets: Pets close.' in submitted[-1]['review']['summary']
+    # Each group sends its own review; the final step sends only the coverage-gap review.
+    reviews = {s['group']: s['review'] for s in submitted if s['stage'] == 'group'}
+    assert reviews['Pets']['summary'] == 'Pets close.' and submitted[-1]['review']['summary'] == 'Coverage gaps: all close.'
 
 
 def test_single_area_api_skips_the_journeys_call():
@@ -203,6 +216,11 @@ def test_portal_flow_review_edit_and_scripts(project, tmp_path, monkeypatch, mak
     assert data['job']['status'] == 'succeeded' and data['analysis']['domain']['summary'] == 'A pet store.'
     assert [a['name'] for a in data['analysis']['domain']['areas']] == ['Pets', 'Store']
     assert data['analysis']['covered'] == data['analysis']['total'] and data['totals']['in_review'] == 6
+    review = data['analysis']['review']
+    assert {a['name'] for a in review['areas']} == {flow_cases.JOURNEYS, 'Pets', 'Store', 'Coverage gaps'}  # groups finish in any order
+    pets = next(a for a in review['areas'] if a['name'] == 'Pets')
+    assert pets['summary'] == 'Pets close.' and pets['verdict'] == 'needs_attention'
+    assert {f['area'] for f in review['findings']} >= {'Pets', 'Store'}
     flows = {f['title']: f for f in data['flows']}
     lifecycle = flows['Revised Flow F01']  # the Pets reviewer flagged it, so the fix pass revised it
     assert lifecycle['category'] == 'happy_path' and lifecycle['content']['steps'][0]['operationId'] == 'createPet'

@@ -15,7 +15,7 @@ FlowType = Literal['happy_path', 'alternate_path', 'negative', 'state_transition
 class Entity(Strict):
     name: str = Field(max_length=80)
     description: str = Field(max_length=600)
-    identifier: str = Field(default='', max_length=80, description='Field that identifies it, e.g. id or petId')
+    identifier: str = Field(default='', max_length=80, description='Field that identifies it, e.g. id or orderId')
     operations: list[str] = Field(default_factory=list, description='operationIds that create, read, change or delete it')
     states: list[str] = Field(default_factory=list, description='Lifecycle states, e.g. available, pending, sold')
     lockedStates: list[str] = Field(default_factory=list, max_length=20,
@@ -48,20 +48,21 @@ class BusinessRule(Strict):
 
 class SideEffect(Strict):
     operationId: str
-    effect: str = Field(max_length=300, description='What else changes, e.g. "a notification is created for the patient"')
+    effect: str = Field(max_length=300, description='What else changes, e.g. "a notification is created for the owner"')
     verifyWith: str = Field(default='', description='operationId that shows the effect, empty when none does')
 
 
 class Area(Strict):
-    name: str = Field(min_length=1, max_length=80, description='Business area, e.g. Patients, Appointments, Billing')
+    name: str = Field(min_length=1, max_length=80, description='Business area, e.g. Accounts, Orders, Billing')
     description: str = Field(default='', max_length=500)
     operations: list[str] = Field(min_length=1, description='operationIds that belong to this area')
 
 
-class DomainModel(Strict):
+class DomainAnalysis(Strict):
+    """What the domain analyst returns."""
     summary: str = Field(max_length=3000, description='What the API is for, in business terms')
     entities: list[Entity] = Field(default_factory=list, max_length=200)
-    relationships: list[str] = Field(default_factory=list, max_length=300, description='e.g. "An order references one pet"')
+    relationships: list[str] = Field(default_factory=list, max_length=300, description='e.g. "An order references one customer"')
     transitions: list[Transition] = Field(default_factory=list, max_length=400)
     businessRules: list[BusinessRule] = Field(default_factory=list, max_length=400)
     areas: list[Area] = Field(default_factory=list, max_length=40,
@@ -70,9 +71,29 @@ class DomainModel(Strict):
     assumptions: list[str] = Field(default_factory=list, max_length=60)
 
 
+class BusinessProcess(Strict):
+    """One end-to-end business process: what a real user or system does from start to outcome, across areas."""
+    key: str = Field(pattern=r'^P\d{1,3}$')
+    name: str = Field(min_length=3, max_length=120, description='e.g. "Order fulfilled from inventory and invoiced"')
+    actors: list[str] = Field(default_factory=list, max_length=8, description='Who takes part, e.g. Customer, Agent, Administrator')
+    description: str = Field(default='', max_length=600, description='What happens, start to finish, in business terms')
+    steps: list[str] = Field(min_length=2, max_length=20,
+                             description='operationIds of the key calls, in the order the process makes them')
+    outcome: str = Field(default='', max_length=300, description='The end state that proves the process worked')
+
+
+class ProcessCatalog(Strict):
+    processes: list[BusinessProcess] = Field(min_length=1, max_length=80)
+
+
+class DomainModel(DomainAnalysis):
+    processes: list[BusinessProcess] = Field(default_factory=list, max_length=80,
+                                             description='End-to-end business processes, found after the areas are known')
+
+
 class StepInput(Strict):
-    target: str = Field(max_length=120, description='Where the value goes: path.petId, query.status, body.petId, body.items[0].sku')
-    source: str = Field(max_length=200, description='steps.S1.petId (a capture of an earlier step), env.NAME, or literal:<value>')
+    target: str = Field(max_length=120, description='Where the value goes: path.orderId, query.status, body.customerId, body.items[0].sku')
+    source: str = Field(max_length=200, description='steps.S1.orderId (a capture of an earlier step), env.NAME, or literal:<value>')
 
 
 class Capture(Strict):
@@ -135,13 +156,19 @@ class FlowCaseSet(Strict):
 class FlowFinding(Strict):
     flowKey: str = Field(description='Flow key the finding is about, or "plan" for missing flows')
     severity: Literal['blocker', 'major', 'minor']
-    issue: str = Field(max_length=600)
-    suggestion: str = Field(default='', max_length=600)
+    issue: str = Field(max_length=600, description='What is wrong, or for "plan": why the missing flow matters')
+    suggestion: str = Field(default='', max_length=600, description='How to fix it')
+    # Only for "plan" (a suggested new flow):
+    title: str = Field(default='', max_length=120, description='Short name of the suggested flow')
+    type: FlowType | None = Field(default=None, description='Type of the suggested flow')
+    priority: Priority | None = None
+    steps: list[str] = Field(default_factory=list, max_length=15, description='The suggested flow, one short step per item')
 
 
 class FlowReview(Strict):
     verdict: Literal['ready', 'needs_attention']
-    summary: str = Field(max_length=800)
+    summary: str = Field(max_length=800, description='One or two sentences on the flows reviewed')
+    strengths: list[str] = Field(default_factory=list, max_length=6, description='What the flows do well, a few words each')
     findings: list[FlowFinding] = Field(default_factory=list, max_length=60)
 
 
@@ -173,12 +200,14 @@ class FlowAnalysisResult(Strict):
     """Sent by the helper in stages so work is saved as it finishes.
 
     - `domain`: the domain analysis, before any flow is designed.
+    - `processes`: business processes found for an existing design (adding end-to-end journeys).
     - `group`: the finished flows of one design group (a business area, or the cross-area journeys).
     - `final`: flows added by the combined coverage check, plus the overall review summary.
     """
-    stage: Literal['domain', 'group', 'final']
+    stage: Literal['domain', 'processes', 'group', 'final']
     group: str = Field(default='', max_length=120)
     domain: DomainModel | None = None
+    processes: list[BusinessProcess] = Field(default_factory=list, max_length=80)
     dependencies: list[dict] = Field(default_factory=list)
     plan: list[FlowOutline] = Field(default_factory=list)
     flows: list[FlowCaseDraft] = Field(default_factory=list)
@@ -240,6 +269,7 @@ def relevant_requirements(required: list[dict], operations: set[str], domain: di
     """The coverage requirements a design group is responsible for."""
     transitions = {f"transition:{t['entity']}:{t['fromState']}->{t['toState']}": t['operationId'] for t in domain.get('transitions', [])}
     rules = {f"rule:{r['key']}": set(r.get('operations', [])) for r in domain.get('businessRules', [])}
+    processes = {f"process:{p['key']}": set(p['steps']) for p in domain.get('processes', [])}
     out = []
     for item in required:
         rid = item['id']
@@ -249,6 +279,8 @@ def relevant_requirements(required: list[dict], operations: set[str], domain: di
             keep = transitions[rid] in operations
         elif rid in rules:
             keep = bool(rules[rid] & operations) or not rules[rid]
+        elif rid in processes:
+            keep = processes[rid] <= operations  # a process inside one area; cross-area ones go to the journeys call
         else:
             keep = False
         if keep:
@@ -257,11 +289,50 @@ def relevant_requirements(required: list[dict], operations: set[str], domain: di
 
 
 def cross_area_requirements(required: list[dict], domain: dict, areas: list[dict]) -> list[dict]:
-    """Rules and transitions whose operations span more than one area: the cross-area call owns them."""
+    """Rules, transitions and business processes that span more than one area: the cross-area call owns them."""
     area_of = {op: area['name'] for area in areas for op in area['operations']}
     spanning = {f"rule:{r['key']}" for r in domain.get('businessRules', [])
                 if len({area_of.get(op) for op in r.get('operations', []) if op in area_of}) > 1}
+    spanning |= {f"process:{p['key']}" for p in domain.get('processes', []) if len(process_areas(p, areas)) > 1}
     return [item for item in required if item['id'] in spanning or item['category'] == 'lifecycle']
+
+
+# --- Business processes (end-to-end coverage) --------------------------------------------------------
+
+def process_areas(process: dict, areas: list[dict]) -> list[str]:
+    """The business areas a process passes through, in the order it reaches them."""
+    area_of = {op: area['name'] for area in areas for op in area['operations']}
+    return list(dict.fromkeys(area_of[op] for op in process['steps'] if op in area_of))
+
+
+def validate_processes(processes: list[dict], endpoints: list[dict]) -> list[dict]:
+    """Keep the processes whose steps are real operations; drop repeats; number them P1, P2, ..."""
+    known = {ep['operationId'] for ep in endpoints}
+    out, seen = [], set()
+    for process in processes:
+        steps = [op for op in process.get('steps', []) if op in known]
+        steps = [op for i, op in enumerate(steps) if i == 0 or op != steps[i - 1]]
+        signature = tuple(steps)
+        if len(steps) < 2 or signature in seen:
+            continue
+        seen.add(signature)
+        out.append({**process, 'steps': steps[:20], 'key': f'P{len(out) + 1}'})
+    return out
+
+
+def uncovered_areas(processes: list[dict], areas: list[dict]) -> list[dict]:
+    """Areas that no business process passes through: every part of the application must be in some journey."""
+    reached = {name for p in processes for name in process_areas(p, areas)}
+    return [area for area in areas if area['name'] not in reached]
+
+
+def in_order(flow_ops: list[str], sequence: list[str]) -> bool:
+    """Whether the flow makes the sequence's calls in this order (other calls may come between)."""
+    position = 0
+    for op in flow_ops:
+        if position < len(sequence) and op == sequence[position]:
+            position += 1
+    return position == len(sequence)
 
 
 # --- Compact API context ----------------------------------------------------------------------------
@@ -444,6 +515,9 @@ def requirement_operations(item: dict, domain: dict) -> set[str]:
     for rule in domain.get('businessRules', []):
         if rid == f"rule:{rule['key']}":
             return set(rule.get('operations', []))
+    for process in domain.get('processes', []):
+        if rid == f"process:{process['key']}":
+            return set(process['steps'])
     return set()
 
 
@@ -456,10 +530,14 @@ def domain_for(domain: dict, operations: set[str], covers: set[str] = frozenset(
     names |= {t['entity'] for t in transitions}
     entities += [e for e in domain.get('entities', []) if e['name'] in names and e not in entities]
     rules = [r for r in domain.get('businessRules', []) if set(r.get('operations', [])) & operations or f"rule:{r['key']}" in covers]
-    return {'summary': domain.get('summary', ''),
-            'entities': [{k: e.get(k) for k in ('name', 'description', 'identifier', 'states')} for e in entities],
-            'relationships': [r for r in domain.get('relationships', []) if any(name in r for name in names)],
-            'transitions': transitions, 'businessRules': rules}
+    out = {'summary': domain.get('summary', ''),
+           'entities': [{k: e.get(k) for k in ('name', 'description', 'identifier', 'states')} for e in entities],
+           'relationships': [r for r in domain.get('relationships', []) if any(name in r for name in names)],
+           'transitions': transitions, 'businessRules': rules}
+    processes = [p for p in domain.get('processes', []) if f"process:{p['key']}" in covers]
+    if processes:
+        out['processes'] = processes
+    return out
 
 
 # --- Coverage requirements and validation --------------------------------------------------------------
@@ -509,13 +587,30 @@ def requirements(endpoints: list[dict], edges: list[dict], domain: dict) -> list
     for i, effect in enumerate(domain.get('sideEffects', []), 1):
         add(f"effect:{effect['operationId']}:{i}", 'side_effect', f"After {effect['operationId']}: {effect['effect']}",
             {'after': effect['operationId'], 'read': effect.get('verifyWith') or ''})
+    for process in domain.get('processes', []):
+        add(f"process:{process['key']}", 'process', f"{process['name']}: {' -> '.join(process['steps'])}",
+            {'sequence': key_steps(process['steps'], methods)})
     return items
+
+
+def key_steps(steps: list[str], methods: dict[str, str]) -> list[str]:
+    """The calls a process cannot do without: every state change in order, then the read that shows the outcome.
+
+    Look-ups along the way (list the options, read a related record) are good practice but not required for coverage.
+    """
+    changes = [op for op in steps if methods.get(op, 'GET') != 'GET']
+    if steps and methods.get(steps[-1], 'GET') == 'GET':
+        changes.append(steps[-1])
+    changes = [op for i, op in enumerate(changes) if i == 0 or op != changes[i - 1]]
+    return changes if len(changes) >= 2 else list(steps)
 
 
 def proof(check: dict | None) -> str:
     """What a flow must contain for its `covers` claim to count, in words the designer can follow."""
     if not check:
         return ''
+    if 'sequence' in check:
+        return f"steps of {', then '.join(check['sequence'])}, in this order (other steps may come between)"
     ops = ', '.join(check.get('ops') or []) or 'any operation'
     if 'after' in check:
         then = f"a later {check['read']} step" if check.get('read') else 'a later step that shows the effect'
@@ -558,6 +653,8 @@ def claim_holds(flow: dict, check: dict | None) -> bool:
     if not check:
         return True
     steps = flow.get('steps', [])
+    if 'sequence' in check:
+        return in_order([st['operationId'] for st in steps], check['sequence'])
     ops = set(check.get('ops') or [])
     uses = (lambda st: st['operationId'] in ops) if ops else (lambda st: True)
     if 'after' in check:
@@ -644,7 +741,11 @@ def satisfied(plan: list[dict], checks: dict | None = None) -> set[str]:
     """
     checks = checks or {}
     done = {rid for flow in plan for rid in flow.get('covers', []) if claim_holds(flow, checks.get(rid))}
+    # A business process is proven by any flow that makes its calls in order, whether or not it claims it.
+    sequences = {rid: check['sequence'] for rid, check in checks.items() if check and 'sequence' in check}
     for flow in plan:
+        ops = [step['operationId'] for step in flow['steps']]
+        done |= {rid for rid, sequence in sequences.items() if rid not in done and in_order(ops, sequence)}
         for step in flow['steps']:
             done.add(f"op:{step['operationId']}")
             for item in step['inputs']:

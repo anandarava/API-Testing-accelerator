@@ -7,7 +7,7 @@ from pydantic import BaseModel, ConfigDict, Field, ValidationError
 from sqlalchemy import delete, select
 from sqlalchemy.orm import Session as DbSession
 
-from contracts import (CLAUDE_MODEL_CATALOG, CLAUDE_MODELS, CUSTOM_MODEL_PATTERN, LOCAL_MODEL_PATTERN, VERSION, HelperHeartbeat,
+from contracts import (ASSISTANT_KINDS, CLAUDE_MODEL_CATALOG, CLAUDE_MODELS, CUSTOM_MODEL_PATTERN, LOCAL_MODEL_PATTERN, VERSION, HelperHeartbeat,
                        JobUsage)
 from contracts.fingerprint import CONTRACT_FINGERPRINT
 from contracts.flows import FlowProgress
@@ -177,10 +177,12 @@ def _touch(db: DbSession, user: User):
 
 
 @router.post('/api/helper/jobs/claim')
-def claim(db: DbSession = Depends(get_db), user: User = Depends(helper_user)):
+def claim(lane: str = 'main', db: DbSession = Depends(get_db), user: User = Depends(helper_user)):
+    """The next job for this helper. The assistant lane takes only assistant messages; the main lane everything else."""
     _touch(db, user)
     now = time.time()
-    candidates = db.scalars(select(Job).where(Job.requested_by == user.id, Job.status.in_(ACTIVE), Job.lease_until < now)
+    kinds = Job.kind.in_(ASSISTANT_KINDS) if lane == 'assistant' else Job.kind.not_in(ASSISTANT_KINDS)
+    candidates = db.scalars(select(Job).where(Job.requested_by == user.id, Job.status.in_(ACTIVE), Job.lease_until < now, kinds)
                             .order_by(Job.created_at)).all()
     for job in candidates:
         if not db.get(ProjectMember, (job.project_id, user.id)):
@@ -199,8 +201,13 @@ def claim(db: DbSession = Depends(get_db), user: User = Depends(helper_user)):
         job.input = {**job.input, 'claudeModel': model}
         project = db.get(Project, job.project_id)
         db.commit()
+        # Sent with an assistant job but not stored on it: a snapshot of the project, taken now.
+        extra = {}
+        if job.kind in ASSISTANT_KINDS:
+            from ..assistant_snapshot import build_snapshot
+            extra['snapshot'] = build_snapshot(db, job.project_id, user)
         return {'job': {'id': job.id, 'kind': job.kind, 'projectId': job.project_id, 'projectName': project.name,
-                        'input': job.input, 'attempt': job.attempts, 'model': model}}
+                        'input': {**job.input, **extra}, 'attempt': job.attempts, 'model': model}}
     db.commit()
     return {'job': None}
 
@@ -227,11 +234,11 @@ def progress(job_id: str, body: ProgressInput, db: DbSession = Depends(get_db), 
 
 def _handlers():
     from .framework import complete_framework_analysis
-    from . import cases, flows, roles, scripts, unit
+    from . import assistant, cases, flows, roles, scripts, unit
     return {'complete': {'framework.analyze': complete_framework_analysis, 'unit.generate': unit.complete_generation,
                          'scripts.generate': scripts.complete_generation, 'flows.generate': flows.complete_generation,
                          'case.regenerate': cases.complete_regeneration, 'access.analyze': roles.complete_analysis,
-                         'roles.generate': roles.complete_generation},
+                         'roles.generate': roles.complete_generation, 'assistant.message': assistant.store_reply},
             'partial': {'unit.generate': unit.store_endpoint_result, 'scripts.generate': scripts.store_script_result,
                         'flows.generate': flows.store_flow_result, 'roles.generate': roles.store_endpoint_result,
                         'case.regenerate': cases.store_regenerated}}

@@ -7,7 +7,7 @@ from . import Strict
 
 
 class ScriptFile(Strict):
-    path: str = Field(min_length=4, max_length=300, description='Path relative to the framework root, e.g. tests/api/pets-create.spec.ts')
+    path: str = Field(min_length=4, max_length=300, description='Path relative to the framework root, e.g. tests/api/orders-create.spec.ts')
     content: str = Field(min_length=20, max_length=400_000, description='The complete TypeScript file')
     caseCodes: list[str] = Field(min_length=1, description='Test case codes (TC-0001, ...) implemented in this file')
 

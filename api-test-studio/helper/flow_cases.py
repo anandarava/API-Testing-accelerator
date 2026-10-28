@@ -1,10 +1,14 @@
 """Flow test case generation for a whole API.
 
 1. dependencies (code) + domain analysis (Claude), saved to the portal at once;
+   The business processes of the application (Claude, after the areas are known) become coverage
+   requirements, so every process gets an end-to-end flow;
 2. design groups run in parallel (PARALLEL_GROUPS at a time): one for cross-area end-to-end
    journeys and one per business area. Each group designs, validates, writes, reviews and fixes its
    flows, then saves them;
 3. the combined coverage check over all flows fills any remaining gaps, then the final save.
+
+`fill_gaps` adds flows for everything an existing design does not cover yet, keeping every existing flow.
 """
 import tempfile
 import threading
@@ -13,11 +17,11 @@ from concurrent.futures import ThreadPoolExecutor
 
 from contracts.cases import validate_detailed_flow
 from contracts.checks import credential_header_problems, placeholder_problems
-from contracts.flows import (JOURNEYS, DomainModel, FlowCaseSet, FlowPlan, FlowReview, brief_endpoint, compact_endpoint,
-                             chunk_operations, cross_area_requirements, dependencies, dependency_hints, domain_for, flow_signature,
-                             for_prompt, merge_domains,
+from contracts.flows import (JOURNEYS, DomainAnalysis, FlowCaseSet, FlowPlan, FlowReview, ProcessCatalog, brief_endpoint,
+                             compact_endpoint, chunk_operations, cross_area_requirements, dependencies, dependency_hints,
+                             domain_for, flow_signature, for_prompt, merge_domains,
                              gaps, operation_index, relevant_requirements, requirement_operations, requirements, satisfied,
-                             split_areas, unproven_claims, validate_plan)
+                             split_areas, uncovered_areas, unproven_claims, validate_plan, validate_processes)
 
 from . import claude
 from .claude import ClaudeError, run_agent
@@ -26,9 +30,11 @@ PARALLEL_GROUPS = 5
 ANALYST_SPLIT = 80  # APIs with more operations are analysed in parts ...
 ANALYST_PART = 50  # ... of about this many operations each
 MAX_GAP_ROUNDS = 2
+MAX_FIX_ROUNDS = 2  # serious findings that come back after the re-review get one more fix
 WRITER_BATCH = 5  # at most this many flows per writer call ...
 WRITER_STEPS = 40  # ... and at most about this many steps, so long journeys get calls of their own
 MAX_FINDINGS = 15
+JOURNEY_BATCH = 6  # business processes per journeys designer call; larger catalogs are designed in parallel batches
 SERIOUS = ('blocker', 'major')
 SEVERITY_ORDER = {'blocker': 0, 'major': 1, 'minor': 2}
 
@@ -56,8 +62,9 @@ def _problems_by_flow(problems: list[str]) -> dict:
 
 
 class FlowPipeline:
-    def __init__(self, api: dict, endpoints: list[dict], agent, workspace, report):
+    def __init__(self, api: dict, endpoints: list[dict], agent, workspace, report, meter=None):
         self.api, self.endpoints, self.agent, self.workspace, self.report = api, endpoints, agent, workspace, report
+        self.meter = meter or claude.job_model
         self.operations = [compact_endpoint(e) for e in endpoints]
         self.by_id = {op['operationId']: op for op in self.operations}
         self.index = [operation_index(e) for e in endpoints]  # one line per operation, for setup steps
@@ -67,6 +74,8 @@ class FlowPipeline:
         self.domain, self.required, self.areas = None, [], []
         self.endpoint_by_id = {e['operationId']: e for e in endpoints}
         self.seen, self.seen_lock = {}, threading.Lock()  # flow signature -> key, across groups running in parallel
+        self.notify = lambda message: None  # progress messages from the analysis
+        self.write_problems: dict[str, list[str]] = {}
 
     def call(self, agent, task, schema):
         return self.agent(agent, task, schema, cwd=self.workspace, max_turns=4)
@@ -76,7 +85,7 @@ class FlowPipeline:
     def analyze(self):
         if len(self.endpoints) <= ANALYST_SPLIT:
             self.domain = self.call('flow-domain-analyst', {'api': self.api, 'operations': self.operations,
-                                                            'dependencies': self.hints}, DomainModel)
+                                                            'dependencies': self.hints}, DomainAnalysis)
         else:
             # Large APIs: each part is analysed in parallel with a one-line index of the whole API, then merged in code.
             parts = chunk_operations(self.endpoints, ANALYST_PART)
@@ -87,13 +96,46 @@ class FlowPipeline:
                 return self.call('flow-domain-analyst', {
                     'api': self.api, 'part': {'number': index + 1, 'of': len(parts)},
                     'operations': self.details(ops), 'operationIndex': self.index,
-                    'dependencies': dependency_hints(self.edges, self.endpoints, ops)}, DomainModel)
+                    'dependencies': dependency_hints(self.edges, self.endpoints, ops)}, DomainAnalysis)
             with ThreadPoolExecutor(max_workers=min(len(parts), PARALLEL_GROUPS), thread_name_prefix='analyst') as pool:
                 self.domain = merge_domains(list(pool.map(one, enumerate(parts))))
-        self.required = requirements(self.endpoints, self.edges, self.domain)
         self.areas = split_areas(self.domain, self.endpoints)
         self.domain['areas'] = self.areas
+        self.notify(f'Finding the business processes across {len(self.areas)} areas')
+        try:
+            processes = self.find_processes()
+        except ClaudeError as exc:
+            if 'usage limit' in str(exc) or 'not signed in' in str(exc):
+                raise
+            processes = []  # the design still works; end-to-end coverage can be added later
+            self.domain.setdefault('assumptions', []).append(f'Business processes could not be listed: {str(exc)[:200]}')
+        self.set_processes(processes)
         return self.domain
+
+    def set_processes(self, processes: list[dict]):
+        self.domain['processes'] = processes
+        self.required = requirements(self.endpoints, self.edges, self.domain)
+
+    def find_processes(self) -> list[dict]:
+        """The application's end-to-end business processes; asks again once for areas no process reaches."""
+        domain = {'summary': self.domain.get('summary', ''),
+                  'entities': [{'name': e['name'], 'states': e.get('states', []), 'description': e.get('description', '')[:200]}
+                               for e in self.domain.get('entities', [])],
+                  'relationships': self.domain.get('relationships', []),
+                  'transitions': [{k: t[k] for k in ('entity', 'fromState', 'toState', 'operationId')}
+                                  for t in self.domain.get('transitions', [])],
+                  'sideEffects': self.domain.get('sideEffects', [])}
+        task = {'api': self.api, 'domain': domain, 'operationIndex': self.index, 'dependencies': self.hints,
+                'areas': [{'name': a['name'], 'description': a['description'], 'operations': a['operations']} for a in self.areas]}
+        found = validate_processes(self.call('flow-process-analyst', {**task, 'mode': 'catalog'}, ProcessCatalog)['processes'],
+                                   self.endpoints)
+        missing = uncovered_areas(found, self.areas)
+        if found and missing and len(self.areas) > 1:
+            more = self.call('flow-process-analyst', {**task, 'mode': 'add', 'existingProcesses': found,
+                                                      'missingAreas': [a['name'] for a in missing]}, ProcessCatalog)['processes']
+            found = validate_processes(found + more, self.endpoints)
+        self.meter.check('flow-process-analyst', len(self.areas), len(uncovered_areas(found, self.areas)))
+        return found
 
     def restore(self, domain: dict, outlines: list[dict]):
         """Continue a stopped design from its saved analysis; new flow keys follow the existing ones."""
@@ -118,14 +160,16 @@ class FlowPipeline:
                 out.append(flow)
         return out
 
+    def journeys(self, required: list[dict]) -> dict:
+        return {'name': JOURNEYS, 'kind': 'journeys', 'operations': set(self.by_id), 'requirements': required,
+                'scope': {'kind': 'journeys', 'name': JOURNEYS, 'areas': [{'name': a['name'], 'description': a['description'],
+                                                                            'operations': a['operations']} for a in self.areas]}}
+
     def groups(self) -> list[dict]:
         """The cross-area journeys group first (when there is more than one area), then one group per area."""
         out = []
         if len(self.areas) > 1:
-            out.append({'name': JOURNEYS, 'kind': 'journeys', 'operations': set(self.by_id),
-                        'requirements': cross_area_requirements(self.required, self.domain, self.areas),
-                        'scope': {'kind': 'journeys', 'name': JOURNEYS, 'areas': [{'name': a['name'], 'description': a['description'],
-                                                                                    'operations': a['operations']} for a in self.areas]}})
+            out.append(self.journeys(cross_area_requirements(self.required, self.domain, self.areas)))
         for area in self.areas:
             ops = set(area['operations'])
             out.append({'name': area['name'], 'kind': 'area', 'operations': ops,
@@ -164,7 +208,7 @@ class FlowPipeline:
     def repair(self, flows: list[dict], group: dict | None) -> list[dict]:
         """Ask the designer to fix structural problems once; drop flows that are still broken."""
         problems = _problems_by_flow(validate_plan(flows, self.endpoints))
-        claude.job_model.check('flow-designer', len(flows), len(problems))
+        self.meter.check('flow-designer', len(flows), len(problems))
         if not problems:
             return flows
         broken = [f for f in flows if f['key'] in problems]
@@ -181,8 +225,27 @@ class FlowPipeline:
             flow['covers'] = [rid for rid in flow['covers'] if rid in known]
         return flows
 
+    @staticmethod
+    def design_batches(group: dict) -> list[list[dict]]:
+        """One designer call, or for many business processes several calls of JOURNEY_BATCH processes each."""
+        processes = [r for r in group['requirements'] if r['category'] == 'process']
+        if group['kind'] != 'journeys' or len(processes) <= JOURNEY_BATCH:
+            return [group['requirements']]
+        others = [r for r in group['requirements'] if r['category'] != 'process']
+        chunks = [processes[i:i + JOURNEY_BATCH] for i in range(0, len(processes), JOURNEY_BATCH)]
+        return [chunks[0] + others, *chunks[1:]]
+
     def design(self, group: dict) -> list[dict]:
-        flows = self.keys.renumber(self.call('flow-designer', self.context(group, mode='plan'), FlowPlan)['flows'])
+        batches = self.design_batches(group)
+
+        def plan(required):
+            return self.call('flow-designer', self.context({**group, 'requirements': required}, mode='plan'), FlowPlan)['flows']
+        if len(batches) == 1:
+            planned = plan(batches[0])
+        else:
+            with ThreadPoolExecutor(max_workers=min(len(batches), 3), thread_name_prefix='journeys') as pool:
+                planned = [flow for flows in pool.map(plan, batches) for flow in flows]
+        flows = self.keys.renumber(planned)
         return self.unique(self.clean_covers(self.repair(flows, group)))
 
     def fill_gaps(self, outlines: list[dict]) -> tuple[list[dict], int]:
@@ -216,12 +279,12 @@ class FlowPipeline:
             steps += size
         return out + ([current] if current else [])
 
-    def write(self, outlines: list[dict], mode='write', current=None, findings=None) -> dict:
+    def write(self, outlines: list[dict], mode='write', current=None, findings=None, attempts: int = 2) -> dict:
         written = {}
         by_key = {o['key']: o for o in outlines}
         for batch in self.batches(outlines):
             problems: dict[str, list[str]] = {}
-            for _attempt in range(2):
+            for _attempt in range(attempts):
                 pending = [o for o in batch if o['key'] not in written]
                 if not pending:
                     break
@@ -251,7 +314,9 @@ class FlowPipeline:
                         problems[flow['flowKey']] = found
                     else:
                         written[flow['flowKey']] = flow
-                claude.job_model.check('flow-case-writer', len(pending), len(problems) + len([o for o in pending if o['key'] not in written and o['key'] not in problems]))
+                self.meter.check('flow-case-writer', len(pending), len(problems) + len([o for o in pending if o['key'] not in written and o['key'] not in problems]))
+            # What kept a flow from being written, for callers that explain it (the assistant's drafts).
+            self.write_problems.update({key: found for key, found in problems.items() if key not in written})
         return written
 
     def review(self, outlines: list[dict], flows: list[dict], group: dict | None, mode: str = 'review') -> dict:
@@ -304,19 +369,26 @@ class FlowPipeline:
             return [], [], {'verdict': 'ready', 'summary': '', 'findings': []}
         step('reviewing', 0.7)
         verdict = self.review(outlines, flows, group)
-        step('fixing what the reviewer found', 0.8)
-        outlines, flows, changed = self.improve(outlines, flows, verdict, group)
-        if changed:
-            step('final review', 0.9)
-            # Re-check only the flows that changed; keep the first review's notes on the others.
+        for fix_round in range(MAX_FIX_ROUNDS):
+            step('fixing what the reviewer found' if fix_round == 0 else 'fixing what the re-review still found',
+                 0.8 + 0.05 * fix_round)
+            # Later rounds fix existing flows again; new flows a re-review suggests are reported, not added.
+            to_fix = verdict if fix_round == 0 else {**verdict, 'findings': [f for f in verdict['findings'] if f['flowKey'] != 'plan']}
+            outlines, flows, changed = self.improve(outlines, flows, to_fix, group)
+            if not changed:
+                break
+            step('final review', 0.85 + 0.05 * fix_round)
+            # Re-check only the flows that changed; keep the earlier review's notes on the others.
             changed_outlines = [o for o in outlines if o['key'] in changed]
             recheck = self.review(changed_outlines, [f for f in flows if f['flowKey'] in changed], group, mode='recheck')
             kept = [f for f in verdict.get('findings', []) if f['flowKey'] not in changed
-                    and not (f['flowKey'] == 'plan' and f['severity'] in SERIOUS)]  # serious suggestions were added
+                    and not (fix_round == 0 and f['flowKey'] == 'plan' and f['severity'] in SERIOUS)]  # those were added
             findings = sorted(kept + recheck.get('findings', []), key=lambda f: SEVERITY_ORDER.get(f.get('severity'), 3))
             ready = not any(f['severity'] in SERIOUS for f in findings)
             verdict = {'verdict': 'ready' if ready else 'needs_attention',
                        'summary': recheck.get('summary') or verdict.get('summary', ''), 'findings': findings[:MAX_FINDINGS * 2]}
+            if ready:
+                break
         written_keys = {f['flowKey'] for f in flows}
         return [o for o in outlines if o['key'] in written_keys], flows, verdict
 
@@ -325,10 +397,63 @@ def _combined_review(reviews: dict[str, dict]) -> dict:
     ready = all(r.get('verdict') == 'ready' for r in reviews.values())
     summary = ' '.join(f"{name}: {r['summary']}" for name, r in reviews.items() if r.get('summary'))
     findings = [f for r in reviews.values() for f in r.get('findings', [])]
-    return {'verdict': 'ready' if ready else 'needs_attention', 'summary': summary[:800], 'findings': findings[:60]}
+    strengths = list(dict.fromkeys(s for r in reviews.values() for s in r.get('strengths', [])))[:6]
+    return {'verdict': 'ready' if ready else 'needs_attention', 'summary': summary[:800], 'strengths': strengths,
+            'findings': findings[:60]}
+
+
+def fill_gaps(job_input: dict, report, submit=None, agent=run_agent) -> dict:
+    """Add flows for every requirement an existing design does not cover yet; no existing flow is changed.
+
+    Business processes the design does not list yet are found first. Uncovered processes get end-to-end flows from
+    the journeys designer; every other gap (rules, status changes, operations, id hand-offs) goes through the
+    usual coverage-gap rounds.
+    """
+    endpoints = [item['details'] for item in job_input['endpoints']]
+    send = submit or (lambda result: None)
+    data = job_input['fillGaps']
+    outlines = data.get('outlines', [])
+    with tempfile.TemporaryDirectory(prefix='studio-flows-') as workspace:
+        pipeline = FlowPipeline(job_input['api'], endpoints, agent, workspace, report)
+        pipeline.restore(data['domain'], outlines)
+        if not pipeline.domain.get('processes'):
+            report(f'Finding the business processes across {len(pipeline.areas)} areas', 5)
+            processes = pipeline.find_processes()
+            if processes:
+                pipeline.set_processes(processes)
+                send({'stage': 'processes', 'processes': processes})
+        total = len(pipeline.required)
+        missing = gaps(pipeline.required, outlines)
+        if not missing:
+            send({'stage': 'final', 'rounds': 1})
+            report(f'Nothing to fill: all {total} coverage requirements are covered', 100)
+            return {'flows': 0}
+        added, saved = [], 0
+        journeys = [r for r in missing if r['category'] == 'process']
+        if journeys:
+            report(f'{len(missing)} of {total} requirements not covered · designing end-to-end flows for '
+                   f'{len(journeys)} business processes', 15)
+            group = pipeline.journeys(journeys)
+            new, flows, verdict = pipeline.finish(pipeline.design(group), group, lambda message, fraction: report(
+                f'End-to-end journeys: {message}', 15 + int(45 * fraction)))
+            if flows:
+                send({'stage': 'group', 'group': JOURNEYS, 'plan': new, 'flows': flows, 'review': verdict})
+            added, saved = new, len(flows)
+        report(f'Checking coverage across {len(outlines) + len(added)} flows', 62)
+        extra, rounds = pipeline.fill_gaps(outlines + added)
+        gap_flows, verdict = [], None
+        if extra:
+            extra, gap_flows, verdict = pipeline.finish(extra, None, lambda message, fraction: report(
+                f'Coverage gaps: {message}', 65 + int(30 * fraction)))
+        send({'stage': 'final', 'plan': extra, 'flows': gap_flows, 'review': verdict, 'rounds': rounds})
+        still = gaps(pipeline.required, outlines + added + extra)
+        report(f'Added {saved + len(gap_flows)} flows; {total - len(still)} of {total} requirements covered', 100)
+        return {'flows': saved + len(gap_flows)}
 
 
 def generate(job_input: dict, report, submit=None, agent=run_agent, parallel: int = PARALLEL_GROUPS) -> dict:
+    if job_input.get('fillGaps'):
+        return fill_gaps(job_input, report, submit, agent)
     endpoints = [item['details'] for item in job_input['endpoints']]
     send = submit or (lambda result: None)
     with tempfile.TemporaryDirectory(prefix='studio-flows-') as workspace:
@@ -359,6 +484,7 @@ def generate(job_input: dict, report, submit=None, agent=run_agent, parallel: in
             track['stageStartedAt'] = {}
         else:
             tell(f'Understanding the business domain across {len(endpoints)} operations', 3)
+            pipeline.notify = lambda message: tell(message, 6)
             domain = pipeline.analyze()
             send({'stage': 'domain', 'domain': domain, 'dependencies': pipeline.edges})
         all_groups = pipeline.groups()
@@ -466,7 +592,8 @@ def generate(job_input: dict, report, submit=None, agent=run_agent, parallel: in
         if not all_outlines and not extra:
             raise ClaudeError('No flows could be designed. See the analysis in the portal.')
         # A continued design already holds the earlier reviews on the portal; send only this job's coverage step there.
-        final_review = _combined_review({k: v for k, v in reviews.items() if k == 'Coverage gaps'} if resume else reviews)
+        # Each group's review is already on the portal (sent with the group); send only this step's own review.
+        final_review = _combined_review({k: v for k, v in reviews.items() if k == 'Coverage gaps'})
         send({'stage': 'final', 'plan': extra, 'flows': flows, 'review': final_review, 'rounds': rounds})
         with lock:
             track['savedFlows'] += len(flows)

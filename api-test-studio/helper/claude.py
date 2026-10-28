@@ -181,15 +181,19 @@ def task_prompt(task: dict) -> str:
 
 
 def run_agent(agent: str, task: dict, schema: type[BaseModel], cwd: str | Path, tools: tuple[str, ...] = (),
-              timeout: int = CLAUDE_TIMEOUT, max_turns: int = 40, model: str | None = None, runner=subprocess.run) -> dict:
+              timeout: int = CLAUDE_TIMEOUT, max_turns: int = 40, model: str | None = None, runner=subprocess.run,
+              meter: JobModel | None = None) -> dict:
     """Run one agent headlessly and return output validated against ``schema``.
 
-    A ``local:`` model runs on the user's OpenAI-compatible server instead of Claude Code.
+    A ``local:`` model runs on the user's OpenAI-compatible server instead of Claude Code. ``meter`` is the job
+    the call belongs to (model and usage); by default the helper's main job.
     """
-    model = model or job_model.selected
+    meter = meter or job_model
+    model = model or meter.selected
     if model and model.startswith(LOCAL_MODEL_PREFIX):
         from . import local_llm
-        return local_llm.run_agent(agent, task, schema, cwd, tools=tools, timeout=timeout, max_turns=max_turns, model=model)
+        return local_llm.run_agent(agent, task, schema, cwd, tools=tools, timeout=timeout, max_turns=max_turns, model=model,
+                                   meter=meter)
     command = claude_command()
     with tempfile.TemporaryDirectory(prefix='studio-agent-') as scratch:
         system_file = Path(scratch) / 'system.md'
@@ -208,7 +212,7 @@ def run_agent(agent: str, task: dict, schema: type[BaseModel], cwd: str | Path, 
             result = runner(args, input=prompt, cwd=str(cwd), env=_clean_env(), capture_output=True, text=True,
                             encoding='utf-8', errors='replace', timeout=timeout)
         except subprocess.TimeoutExpired as exc:
-            job_model.fail(agent)
+            meter.fail(agent)
             raise ClaudeError(f'Claude did not finish within {timeout // 60} minutes.') from exc
         except OSError as exc:
             raise ClaudeError(f'Could not start Claude Code: {exc}') from exc
@@ -218,9 +222,9 @@ def run_agent(agent: str, task: dict, schema: type[BaseModel], cwd: str | Path, 
     except ValueError:
         envelope = None
     if isinstance(envelope, dict):
-        job_model.record(envelope, agent)
+        meter.record(envelope, agent)
     if result.returncode or not isinstance(envelope, dict) or envelope.get('is_error'):
-        job_model.fail(agent)
+        meter.fail(agent)
         detail = friendly_failure(combined) or (envelope or {}).get('result') or result.stderr.strip() or 'no output'
         raise ClaudeError(f'Claude could not complete the {agent} task: {str(detail)[-800:]}')
     output = envelope.get('structured_output')

@@ -29,11 +29,11 @@ map it onto every operation of the API so testers know exactly who may do what.
   it. Add roles the contract clearly has but the file does not list only to `missingFromFile`.
 - `operations`: one entry per operation, putting **every role** in exactly one list:
   - `allowed`: may call it for any record in scope;
-  - `own`: may call it only for their own records (a patient's own appointments);
+  - `own`: may call it only for their own records (a customer's own orders, a user's own profile);
   - `denied`: must be refused;
   - `unknown`: neither the roles file nor the contract decides it. Do not guess; the QA decides.
   `evidence` quotes the roles-file or contract text you used; `source` is `file`, `spec`, `both` or
-  `inferred` (from patterns such as `/admin/...` or `/patients/me`; mark these honestly).
+  `inferred` (from patterns such as `/admin/...` or `/users/me`; mark these honestly).
 - `rules`: access rules beyond allow/deny, each with its `kind`: `ownership`, `hidden_data` (a role
   must not see some records or fields, e.g. draft results), `protected_field` (a role must not
   change some fields, e.g. their own fee or role), or `other`; plus the operations and roles it

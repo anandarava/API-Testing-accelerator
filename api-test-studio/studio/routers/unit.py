@@ -376,7 +376,11 @@ def delete_case(project_id: str, case_id: str, db: DbSession = Depends(get_db), 
     project, _ = membership(db, project_id, user)
     case = project_case(db, project_id, case_id)
     record(db, project, user, 'unit.case_deleted', f'{user.name} deleted {code(case)} {case.title}')
+    module = case.module
     db.delete(case)
+    if module == 'flow':
+        from .flows import refresh_coverage
+        refresh_coverage(db, project_id)  # what the deleted flow covered may now be a gap
     db.commit()
     return {'ok': True}
 

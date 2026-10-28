@@ -30,13 +30,13 @@ negative case is that valid request with exactly one change.
 | `{{unique.name}}` | A unique value per run, used when the API enforces uniqueness. |
 | `{{repeat:x:51}}` | A string of 51 `x` characters; use for length boundaries above 20 characters. |
 | `{{uuid.random}}` | A random UUID that does not exist (for 404 cases). |
-| `{{created.<field>}}` | A value from a resource created in a precondition, e.g. `{{created.petId}}`. |
-| `{{steps.<StepKey>.<capture>}}` | In flow tests: a value captured by an earlier step, e.g. `{{steps.S1.petId}}`. |
+| `{{created.<field>}}` | A value from a resource created in a precondition, e.g. `{{created.orderId}}`. |
+| `{{steps.<StepKey>.<capture>}}` | In flow tests: a value captured by an earlier step, e.g. `{{steps.S1.orderId}}`. |
 
 ## Preconditions and cleanup
 
-- If the case needs an existing resource, add a precondition ("Create a pet and keep its id as
-  `{{created.petId}}`") and a cleanup step ("Delete the pet created in the precondition").
+- If the case needs an existing resource, add a precondition ("Create the record and keep its id as
+  `{{created.recordId}}`") and a cleanup step ("Delete the record created in the precondition").
 - Duplicate/conflict cases create the first resource in a precondition, then send the duplicate.
 - Cases that create data must list cleanup steps.
 

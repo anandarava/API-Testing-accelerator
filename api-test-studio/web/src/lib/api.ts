@@ -343,8 +343,26 @@ export interface DomainModel {
   businessRules: { key: string; rule: string; source: string; operations: string[]; kind?: string; needsSupport?: string }[];
   sideEffects?: { operationId: string; effect: string; verifyWith: string }[];
   areas?: { name: string; description: string; operations: string[] }[];
+  /** End-to-end business processes; each needs a flow that makes its steps in order. */
+  processes?: BusinessProcess[];
   assumptions: string[];
 }
+
+/** The AI reviewer's verdict on a flow design. `areas` and the structured suggestion fields exist for reviews made since they were added. */
+export interface FlowReviewData {
+  verdict: 'ready' | 'needs_attention';
+  summary: string;
+  strengths?: string[];
+  areas?: { name: string; verdict: 'ready' | 'needs_attention'; summary: string; strengths: string[] }[];
+  findings: ReviewFinding[];
+}
+
+export interface ReviewFinding {
+  flowKey: string; severity: string; issue: string; suggestion: string;
+  area?: string; title?: string; type?: string | null; priority?: string | null; steps?: string[];
+}
+
+export interface BusinessProcess { key: string; name: string; actors: string[]; description: string; steps: string[]; outcome: string }
 
 export interface AccessRow {
   operationId: string;
@@ -396,8 +414,8 @@ export interface FlowsOverview {
   job: Job | null;
   analysis: {
     domain: DomainModel;
-    review: { verdict: 'ready' | 'needs_attention'; summary: string; findings: { flowKey: string; severity: string; issue: string; suggestion: string }[] } | null;
-    requirements: { id: string; category: string; description: string; covered: boolean }[];
+    review: FlowReviewData | null;
+    requirements: { id: string; category: string; description: string; covered: boolean; check?: { sequence?: string[] } }[];
     covered: number;
     total: number;
     generatedAt: number;
@@ -413,3 +431,48 @@ export interface FlowsOverview {
 }
 
 export interface FlowScriptRow extends ScriptSummary { id: string; code: string; title: string; steps: number; generatedBy: string | null }
+
+// --- Project assistant ------------------------------------------------------------------------------
+
+export interface AssistantCaseRef { code: string; id: string; module: 'unit' | 'flow' | 'role'; title: string; status: CaseStatus; needsConfirmation: boolean; endpointId: string | null }
+
+export interface AssistantAction {
+  kind: 'review' | 'regenerate' | 'fill_gaps' | 'export' | 'open';
+  title: string;
+  reviewAction: 'approve' | 'needs_changes' | 'reject' | 'reopen' | null;
+  comment: string;
+  instruction: string;
+  page: string | null;
+  state: 'proposed' | 'done' | 'dismissed';
+  result: string;
+  cases: AssistantCaseRef[];
+}
+
+export interface AssistantDraft {
+  title: string; type: string; priority: string; area: string; objective: string;
+  needsConfirmation: boolean; confirmationNote: string; steps: string[];
+  state: 'pending' | 'added' | 'discarded'; caseCode: string | null;
+}
+
+export interface AssistantMessage {
+  id: string;
+  role: 'user' | 'assistant';
+  text: string;
+  createdAt: number;
+  status: 'pending' | 'done' | 'failed';
+  progress?: string;
+  error?: string;
+  cases?: AssistantCaseRef[];
+  actions?: AssistantAction[];
+  drafts?: AssistantDraft[];
+  draftError?: string;
+  followUps?: string[];
+  models?: string[];
+}
+
+export interface AssistantState {
+  messages: AssistantMessage[];
+  helperConnected: boolean;
+  download?: string;
+  navigate?: string;
+}

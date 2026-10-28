@@ -304,3 +304,18 @@ class RoleCoverage(Base):
     job_id: Mapped[str] = mapped_column(String(32))
     generated_by: Mapped[str] = mapped_column(ForeignKey('users.id'))
     generated_at: Mapped[float] = mapped_column(Float, default=now)
+
+
+class AssistantMessage(Base):
+    """One message of a user's conversation with the project assistant (each user has their own per project)."""
+    __tablename__ = 'assistant_messages'
+    id: Mapped[str] = mapped_column(String(32), primary_key=True, default=uid)
+    project_id: Mapped[str] = mapped_column(ForeignKey('projects.id', ondelete='CASCADE'), index=True)
+    user_id: Mapped[str] = mapped_column(ForeignKey('users.id', ondelete='CASCADE'), index=True)
+    role: Mapped[str] = mapped_column(String(10))  # user | assistant
+    text: Mapped[str] = mapped_column(Text, default='')
+    payload: Mapped[dict] = mapped_column(JSON, default=dict)  # the reply, its actions and drafts with their state
+    context: Mapped[dict] = mapped_column(JSON, default=dict)  # the page the user asked from
+    job_id: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    created_at: Mapped[float] = mapped_column(Float, default=now)
+

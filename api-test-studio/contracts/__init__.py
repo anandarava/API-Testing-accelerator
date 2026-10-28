@@ -173,4 +173,6 @@ class FrameworkAnalysisResult(Strict):
 
 
 JOB_KINDS = ('framework.analyze', 'unit.generate', 'scripts.generate', 'flows.generate', 'case.regenerate', 'access.analyze',
-             'roles.generate')
+             'roles.generate', 'assistant.message')
+# Answered on the helper's own lane, so a long generation never blocks a question.
+ASSISTANT_KINDS = ('assistant.message',)

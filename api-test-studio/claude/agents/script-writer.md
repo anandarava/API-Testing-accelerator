@@ -29,8 +29,8 @@ that looks exactly like the team's existing tests and is ready to run.
 - `endpoint.roles` lists the project roles with their `envPrefix`. A role signs in with the
   framework's existing login or auth helper when it supports several users; otherwise sign in inside
   this file through the API's login operation. Credentials come from environment variables: use the
-  names in `credentialKeys` that belong to the role (e.g. `DOCTOR_USERNAME` / `DOCTOR_PASSWORD`, or
-  `DOCTOR_TOKEN`); when none exist, use `<envPrefix>_USERNAME` and `<envPrefix>_PASSWORD`, and for
+  names in `credentialKeys` that belong to the role (e.g. `MANAGER_USERNAME` / `MANAGER_PASSWORD`, or
+  `MANAGER_TOKEN`); when none exist, use `<envPrefix>_USERNAME` and `<envPrefix>_PASSWORD`, and for
   `userSlot: "second"` `<envPrefix>_2_USERNAME` / `<envPrefix>_2_PASSWORD`. List every variable you
   use in `envVariables`.
 - Sign each role in once per test file (e.g. in `beforeAll`) and reuse the token.

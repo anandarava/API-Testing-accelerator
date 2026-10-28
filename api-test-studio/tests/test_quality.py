@@ -26,8 +26,11 @@ def test_unit_claims_need_the_right_category_and_status():
 
 def test_writer_output_checks():
     good = {'category': 'positive', 'request': {'auth': 'valid', 'headers': {}, 'body': {'name': 'Rex'}},
-            'expected': {'status': 201}}
+            'expected': {'status': 201, 'responseSchema': 'success', 'bodyChecks': [{'path': '$.id', 'check': 'exists'}]}}
     assert unit_case_problems(good, CREATE_PET, PARSED['securitySchemes']) == []
+    status_only = {**good, 'expected': {'status': 201, 'responseSchema': 'none', 'bodyChecks': []}}
+    problems = ' '.join(unit_case_problems(status_only, CREATE_PET, PARSED['securitySchemes']))
+    assert 'responseSchema to "success"' in problems and 'add bodyChecks' in problems
     bad = {'category': 'positive', 'request': {'auth': 'valid', 'headers': {'Authorization': 'Bearer x'},
                                                'body': {'name': 5, 'note': '{{random.word}}'}}, 'expected': {'status': 418}}
     problems = ' '.join(unit_case_problems(bad, CREATE_PET, PARSED['securitySchemes']))

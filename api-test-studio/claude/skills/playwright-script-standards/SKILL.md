@@ -52,8 +52,8 @@ A flow case has ordered `steps`; each step has its own `request`, `expected` and
 
 - One spec file per flow, one `test()` whose title starts with the flow's case code, and one
   `await test.step('S1 <purpose>', async () => { ... })` per step, in order.
-- Captures become typed local variables declared before the steps (`let petId = '';`) and assigned
-  inside the step from the response body at the capture path. `{{steps.S1.petId}}` in a later
+- Captures become typed local variables declared before the steps (`let orderId = '';`) and assigned
+  inside the step from the response body at the capture path. `{{steps.S1.orderId}}` in a later
   request is that variable.
 - Assert each step's status and body checks inside its `test.step`, so the report shows which step
   failed.

@@ -1,0 +1,18 @@
+flowchart TD
+    A(["QA selects endpoints and clicks Generate"]) --> B["Portal creates the job<br/>Local Helper picks it up<br/>up to 5 endpoints at a time"]
+    B --> C["<b>Build the coverage checklist</b><br/><i>Code, no AI</i><br/>valid requests, statuses, field rules,<br/>path ids, body, login"]
+    C --> D["<b>Plan the scenarios S01, S02 ...</b><br/>Agent: unit-scenario-planner<br/>Skills: api-test-design-techniques"]
+    D --> E{"Checklist fully covered?"}
+    E -- "No, up to 2 more tries" --> D2["<b>Add the missing scenarios</b><br/>Agent: unit-scenario-planner<br/>Skills: api-test-design-techniques"]
+    D2 --> E
+    E -- Yes --> G["<b>Write the test cases</b><br/>Agent: unit-case-writer<br/>Skills: api-test-data"]
+    G --> H{"Code checks pass?"}
+    H -- "No: retry once,<br/>then mark Needs confirmation" --> G
+    H -- Yes --> I["<b>Review the cases</b><br/>Agent: unit-case-reviewer<br/>Skills: api-test-design-techniques"]
+    I --> J{"Blocker or major findings?"}
+    J -- Yes --> K["<b>Add suggested scenarios</b><br/>Agent: unit-scenario-planner<br/>Skills: api-test-design-techniques"]
+    K --> L["<b>Rewrite the flagged cases</b><br/>Agent: unit-case-writer<br/>Skills: api-test-data"]
+    L --> M["<b>Re-review the changed cases</b><br/>Agent: unit-case-reviewer<br/>Skills: api-test-design-techniques"]
+    M --> N
+    J -- No --> N["Portal re-checks coverage<br/>and saves the cases as In review"]
+    N --> O(["QA reviews and approves"])

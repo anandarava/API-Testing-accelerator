@@ -8,6 +8,7 @@ import { plural, timeAgo } from '../lib/format';
 import { CATEGORY_LABEL, PriorityBadge, STATUS_LABEL, StatusBadge, statusTone } from '../components/cases';
 import { CaseDrawer, ReviewDialog } from '../components/CaseDrawer';
 import { ExportMenu } from '../components/CaseTools';
+import { GroupCheckbox } from './FlowCases';
 import { Alert, Badge, Button, Card, CardHeader, Dialog, EmptyState, MethodBadge, ProgressBar, Spinner, cx, useToast } from '../components/ui';
 
 type Filter = 'all' | CaseStatus;
@@ -80,13 +81,12 @@ export function UnitEndpointPage() {
             description="Claude will design every scenario for this endpoint, check them against the spec's requirements and review them before they reach you." /></Card>
         ) : (
           <>
-            <div className="grid gap-6 lg:grid-cols-2">
-              <CoverageCard data={data} />
-              <ReviewerCard data={data} />
-            </div>
-
-            <Card>
-              <div className="flex flex-wrap items-center gap-2 border-b border-line px-5 py-3">
+            <div className="space-y-3">
+            <Card className="sticky top-0 z-10">
+              <div className="flex flex-wrap items-center gap-2 px-5 py-3">
+                <label className="mr-2 flex cursor-pointer items-center gap-2 border-r border-line pr-4 text-sm text-ink-soft">
+                  <input type="checkbox" className="size-4 accent-brand-600" checked={allSelected} onChange={() => setSelected(allSelected ? new Set() : new Set(visible.map((c) => c.id)))} /> Select all
+                </label>
                 {(['all', 'in_review', 'approved', 'needs_changes', 'rejected'] as Filter[]).map((value) => (
                   <button key={value} onClick={() => { setFilter(value); setSelected(new Set()); }}
                     className={cx('h-8 cursor-pointer rounded-full border px-3 text-xs font-medium',
@@ -96,7 +96,7 @@ export function UnitEndpointPage() {
                 ))}
               </div>
               {selected.size > 0 && (
-                <div className="flex flex-wrap items-center gap-2 border-b border-line bg-brand-50/50 px-5 py-2.5 text-sm">
+                <div className="flex flex-wrap items-center gap-2 rounded-b-xl border-t border-line bg-brand-50/50 px-5 py-2.5 text-sm">
                   <span className="mr-2 font-medium text-ink">{plural(selected.size, 'case')} selected</span>
                   <Button size="sm" icon={<CircleCheck className="size-4" />} loading={review.isPending && review.variables?.action === 'approve'}
                     onClick={() => (unconfirmed ? setDialog('confirm_approve') : review.mutate({ action: 'approve' }))}>Approve</Button>
@@ -105,16 +105,18 @@ export function UnitEndpointPage() {
                   <button className="ml-auto cursor-pointer text-sm text-muted hover:text-ink" onClick={() => setSelected(new Set())}>Clear</button>
                 </div>
               )}
-              <div className="hidden grid-cols-[2rem_5.5rem_minmax(0,1fr)_5rem_4.5rem_7.5rem] gap-3 border-b border-line bg-canvas/60 px-5 py-2 text-xs font-medium text-muted md:grid">
-                <input type="checkbox" className="size-4 accent-brand-600" checked={allSelected} onChange={() => setSelected(allSelected ? new Set() : new Set(visible.map((c) => c.id)))} aria-label="Select all" />
-                <span>ID</span><span>Test case</span><span>Priority</span><span>Expect</span><span>Status</span>
-              </div>
-              {visible.length === 0 ? <p className="px-5 py-10 text-center text-sm text-muted">No cases with this status.</p> : (
-                <ul className="divide-y divide-line">
-                  {visible.map((c) => <CaseRow key={c.id} item={c} regenerating={data.regenerating.includes(c.id)} checked={selected.has(c.id)} onToggle={() => toggle(c.id)} onOpen={() => setOpenCase(c.id)} />)}
-                </ul>
-              )}
             </Card>
+            {visible.length === 0 ? <Card><p className="px-5 py-10 text-center text-sm text-muted">No cases with this status.</p></Card> : (
+              <TypeGroups cases={visible} all={cases} selected={selected} setSelected={setSelected}
+                renderRow={(c) => <CaseRow key={c.id} item={c} grouped regenerating={data.regenerating.includes(c.id)} checked={selected.has(c.id)}
+                  onToggle={() => toggle(c.id)} onOpen={() => setOpenCase(c.id)} />} />
+            )}
+            </div>
+
+            <div className="grid gap-6 lg:grid-cols-2">
+              <CoverageCard data={data} />
+              <ReviewerCard data={data} />
+            </div>
           </>
         )}
       </div>
@@ -135,7 +137,68 @@ export function UnitEndpointPage() {
   );
 }
 
-function CaseRow({ item, regenerating, checked, onToggle, onOpen }: { item: TestCase; regenerating: boolean; checked: boolean; onToggle: () => void; onOpen: () => void }) {
+/** The endpoint's cases grouped by test type, in the order of CATEGORY_LABEL; each type starts collapsed. */
+function TypeGroups({ cases, all, selected, setSelected, renderRow }: {
+  cases: TestCase[]; all: TestCase[]; selected: Set<string>; setSelected: (s: Set<string>) => void; renderRow: (c: TestCase) => React.ReactNode;
+}) {
+  const [open, setOpen] = useState<Set<string>>(new Set());
+  const order = [...new Set([...Object.keys(CATEGORY_LABEL), ...cases.map((c) => c.category)])];
+  const groups = order.map((type) => ({ type, cases: cases.filter((c) => c.category === type) })).filter((g) => g.cases.length);
+  const flip = (type: string) => setOpen((s) => { const n = new Set(s); if (n.has(type)) n.delete(type); else n.add(type); return n; });
+  return (
+    <div className="space-y-3">
+      <div className="flex items-center justify-end gap-4 px-1 text-xs">
+        <button className="cursor-pointer py-1 font-medium text-brand-600 hover:underline" onClick={() => setOpen(new Set(groups.map((g) => g.type)))}>Expand all</button>
+        <button className="cursor-pointer py-1 font-medium text-brand-600 hover:underline" onClick={() => setOpen(new Set())}>Collapse all</button>
+      </div>
+      {groups.map((group) => {
+        const isOpen = open.has(group.type);
+        const label = CATEGORY_LABEL[group.type] ?? group.type;
+        const inType = all.filter((c) => c.category === group.type);
+        const approved = inType.filter((c) => c.status === 'approved').length;
+        const priorities = (['P1', 'P2', 'P3'] as const).map((p) => [p, group.cases.filter((c) => c.priority === p).length] as const).filter(([, n]) => n);
+        const flagged = group.cases.filter((c) => c.needsConfirmation).length;
+        return (
+          <section key={group.type} className={cx('rounded-2xl border bg-surface transition-shadow', isOpen ? 'border-brand-500/40 shadow-sm' : 'border-line')}>
+            <div className="flex items-start gap-3 rounded-2xl px-5 py-4 hover:bg-canvas/60">
+              <span className="mt-1"><GroupCheckbox ids={group.cases.map((c) => c.id)} selected={selected} setSelected={setSelected} label={`Select all ${label} cases`} /></span>
+              <button onClick={() => flip(group.type)} aria-expanded={isOpen} className="flex min-w-0 flex-1 cursor-pointer items-start gap-2.5 text-left">
+                <ChevronDown className={cx('mt-1 size-4 shrink-0 text-muted transition-transform', !isOpen && '-rotate-90')} />
+                <span className="flex min-w-0 flex-1 flex-col gap-1">
+                  <span className="flex flex-wrap items-center gap-2.5">
+                    <span className="text-base font-semibold text-ink">{label}</span>
+                    <span className="inline-flex h-[22px] items-center rounded-full bg-brand-50 px-2 text-xs font-semibold text-brand-700">{plural(group.cases.length, 'case')}</span>
+                  </span>
+                  <span className="flex flex-wrap gap-x-3.5 gap-y-1 text-xs text-ink-soft">
+                    {priorities.map(([p, n]) => <span key={p}>{({ P1: 'High', P2: 'Medium', P3: 'Low' })[p]} <span className="font-semibold">{n}</span></span>)}
+                    {flagged > 0 && <span className="text-amber-800">{flagged} to confirm</span>}
+                  </span>
+                </span>
+                <span className="flex w-28 shrink-0 flex-col items-end gap-1.5 pt-0.5">
+                  <span className="text-xl font-semibold leading-none text-ink tabular-nums">{approved}<span className="text-sm font-medium text-muted"> / {inType.length}</span></span>
+                  <span className="text-xs text-muted">approved</span>
+                  <span className="block h-1.5 w-24 overflow-hidden rounded-full bg-gray-200">
+                    <span className="block h-full rounded-full bg-emerald-600" style={{ width: `${inType.length ? (100 * approved) / inType.length : 0}%` }} />
+                  </span>
+                </span>
+              </button>
+            </div>
+            {isOpen && (
+              <div className="mx-5 mb-5 overflow-hidden rounded-lg border border-line">
+                <div className="hidden grid-cols-[2rem_5.5rem_minmax(0,1fr)_5rem_4.5rem_7.5rem] gap-3 border-b border-line bg-canvas/60 px-5 py-2 text-xs font-medium text-muted md:grid">
+                  <span /><span>ID</span><span>Test case</span><span>Priority</span><span>Expect</span><span>Status</span>
+                </div>
+                <ul className="divide-y divide-line">{group.cases.map(renderRow)}</ul>
+              </div>
+            )}
+          </section>
+        );
+      })}
+    </div>
+  );
+}
+
+function CaseRow({ item, grouped = false, regenerating, checked, onToggle, onOpen }: { item: TestCase; grouped?: boolean; regenerating: boolean; checked: boolean; onToggle: () => void; onOpen: () => void }) {
   const serious = item.findings.filter((f) => f.severity !== 'minor').length;
   return (
     <li className="grid cursor-pointer grid-cols-[2rem_minmax(0,1fr)_auto] items-center gap-3 px-5 py-3 hover:bg-canvas md:grid-cols-[2rem_5.5rem_minmax(0,1fr)_5rem_4.5rem_7.5rem]" onClick={onOpen}>
@@ -144,7 +207,7 @@ function CaseRow({ item, regenerating, checked, onToggle, onOpen }: { item: Test
       <div className="min-w-0">
         <p className="truncate text-sm font-medium text-ink">{item.title}</p>
         <div className="mt-1 flex flex-wrap items-center gap-1.5">
-          <span className="text-xs text-muted">{CATEGORY_LABEL[item.category] ?? item.category}</span>
+          {!grouped && <span className="text-xs text-muted">{CATEGORY_LABEL[item.category] ?? item.category}</span>}
           {item.needsConfirmation && <Badge tone="amber"><CircleHelp className="size-3" /> Confirm expected result</Badge>}
           {serious > 0 && <Badge tone="red">{plural(serious, 'review note')}</Badge>}
           {item.outdated && <Badge tone="amber">Outdated</Badge>}

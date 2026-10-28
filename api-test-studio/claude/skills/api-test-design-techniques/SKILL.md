@@ -24,7 +24,7 @@ Work through every category. Skip a category only when the contract gives it not
 | `query_params` | Limits, enum filters, unknown filters ignored or rejected, combinations that change results. |
 | `headers` | Unsupported `Content-Type` (e.g. `text/plain`); missing or wrong `Accept` when the contract defines media types; required custom headers missing. |
 | `auth` | No credentials; invalid or expired credentials → 401; valid credentials without permission → 403 when documented. |
-| `business` | Every rule written in summaries and descriptions: uniqueness ("names must be unique" → duplicate → 409), state rules ("only available pets can be ordered"), calculated values, side effects. Quote the rule in `source`. |
+| `business` | Every rule written in summaries and descriptions: uniqueness ("names must be unique" → duplicate → 409), state rules ("only ACTIVE records can be updated"), calculated values, side effects. Quote the rule in `source`. |
 | `contract` | Response structure: required response fields present, types correct, error responses follow the documented error schema. |
 | `security` | Read-only fields sent in the request (mass assignment) are ignored or rejected; injection-style strings in text fields are stored safely or rejected; oversized payloads are rejected. |
 | `idempotency` | Repeating PUT/DELETE gives a consistent result; repeating POST creates duplicates or is rejected as the contract says. |

@@ -29,7 +29,7 @@ every finding; keep everything that was already correct.
 
 For each case:
 
-- `title`: clear and specific, e.g. "Reject pet when name exceeds 50 characters".
+- `title`: clear and specific, e.g. "Reject a create request when name exceeds 50 characters".
 - `objective`: one or two sentences on what the case proves and why it matters.
 - `preconditions`: data or state required before the request (create resources, valid token).
 - `request`: concrete values. Start from a fully valid request and change only what the scenario
@@ -38,7 +38,9 @@ For each case:
 - `expected`: the documented status, which schema to validate, and focused `bodyChecks`. Use the
   check type that fits: `matches_pattern` for formats such as UUIDs, `one_of` for enums,
   `matches_request` to prove a value echoes the request, `exists` for generated ids. Do not assert
-  exact error message text unless the contract documents it.
+  exact error message text unless the contract documents it. A 2xx response with a documented
+  body must use `responseSchema` `success` and at least one `bodyCheck`; a status-only check is
+  rejected.
 - `testData`: how special values are produced (e.g. "name uses {{repeat:x:51}}").
 - `cleanup`: how created data is removed.
 - Keep `needsConfirmation` and `confirmationNote` from the scenario, and add them when you are not

@@ -135,17 +135,35 @@ computer of the person who clicked:
    enumerates paths, so large APIs stay fast.
 2. **Domain analysis (Claude, `flow-domain-analyst`).** Entities, relationships, lifecycle states
    and transitions, business rules, assumptions, and a split of the API into **business areas**
-   (every operation in exactly one area). Saved to the portal immediately.
-3. **Design groups, in parallel (5 at a time).** One **cross-area journeys** group designs the
-   end-to-end processes that span areas (e.g. register patient → book appointment → admit → invoice
-   → pay → discharge); one group per **business area** designs that area's lifecycles, state
+   (every operation in exactly one area). Then **business processes (Claude, `flow-process-analyst`)**:
+   every end-to-end process the application supports (register → book → pay → consult → invoice;
+   prescription → pharmacy dispensing; admin onboards a doctor → patients book them …), each with its
+   key calls in order. Code checks that **every area is in some process** and asks once more for the
+   areas that are not. Saved to the portal immediately.
+3. **Design groups, in parallel (5 at a time).** One **cross-area journeys** group designs one
+   `end_to_end` flow per business process (in parallel batches of 6 processes for large APIs), starting
+   from data the flow creates itself and proving each hand-off between areas; one group per **business area** designs that area's lifecycles, state
    transitions, negatives and data-integrity flows (steps may call other areas when needed). There is
    **no step limit**. Each group validates its flows (real operations, documented statuses, every
    chained value captured by an earlier step), writes them (`flow-case-writer`), reviews them
    (`flow-reviewer`), fixes serious findings, and **saves its flows as soon as it finishes**.
 4. **Combined coverage check (code).** Over all groups' flows: every operation used, every path id
-   received from an earlier step, every lifecycle transition and every business rule covered. Gaps go
-   back to Claude (up to two rounds) and the resulting flows are saved under *Coverage gaps*.
+   received from an earlier step, every lifecycle transition, every business rule and **every business
+   process** covered. A process counts when a flow makes all its state-changing calls in order and
+   ends with its outcome read (look-ups in between are optional). Gaps go back to Claude (up to two
+   rounds) and the resulting flows are saved under *Coverage gaps*.
+
+Once a design exists, **Design flows ▾** offers two options:
+
+- **Fill gaps (keep existing flows)** (`POST /flows/fill-gaps`, helper `fill_gaps`): finds the business
+  processes if the design has none yet, designs end-to-end flows for the uncovered processes, then runs the
+  usual coverage-gap rounds for every other uncovered requirement (rules, status changes, operations, id
+  hand-offs). Nothing existing is changed. Disabled when every requirement is covered.
+- **Redesign everything** (`POST /flows/generate`, after a confirmation): analyses the API again and
+  replaces every flow that is not approved.
+
+Coverage is recomputed whenever a flow is added, edited or deleted. The **Business processes** tab of
+*API analysis & coverage* shows each process, its key calls and the flows that cover it.
 
 Every Claude call may run up to 60 minutes. Each flow shows the area it was designed for.
 
@@ -189,6 +207,26 @@ yourself (`npx playwright test`).
   regenerated version is discarded.
 - **Generate missing scripts** (Scripts page): one click for every endpoint and flow whose approved
   cases have no script yet or changed since the last one.
+
+## Project assistant
+
+The **Ask** button on every project page opens a side panel where a user can ask about the project,
+ask for an action, or describe a flow the AI missed. Each message is an `assistant.message` job on the
+user's own helper, answered on the helper's **assistant lane** (`Helper(lane='assistant')`, polled every
+second) so a running generation never blocks it; the claim endpoint takes `?lane=assistant`.
+
+- **Answers** come from a snapshot of the project the portal builds when the job is claimed
+  (`studio/assistant_snapshot.py`): `README.md`, `stats.md` (all counts, computed in code), `flows/index.md`,
+  one file per flow, `unit/index.md`, `roles/index.md`, `analysis/` (domain, business processes,
+  coverage gaps), `endpoints.md`, `activity.md`. The `project-assistant` agent reads them with
+  Read/Glob/Grep, so it works on Claude Code and on a local model alike. Every TC code in an answer is a link.
+- **Actions** (approve/reject/send back/reopen, regenerate one case, fill coverage gaps, export,
+  open a page) are only proposed. They run when the user clicks **Confirm**, through the same functions and
+  permission checks as the page buttons, and are recorded in Activity.
+- **Missed flows**: the agent turns the description into a flow request; the helper designs it with
+  `flow-designer` (`add-suggested`), runs the usual code checks and fix pass, and writes it with
+  `flow-case-writer`. The draft appears with **Add to flows**, which checks it again on the server and saves
+  it in review under its business area (or *Cross-area journeys*), marked as requested through the assistant.
 
 ## Project layout
 

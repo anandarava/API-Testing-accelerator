@@ -84,6 +84,20 @@ def schema_problems(value, schema: dict | None, path: str = 'body', depth: int =
     return problems
 
 
+def response_check_problems(expected: dict, endpoint: dict) -> list[str]:
+    """A success whose body the contract documents must check that body, not only the status code."""
+    status = str(expected.get('status') or '')
+    if not status.startswith('2') or not (endpoint.get('responses', {}).get(status) or {}).get('schema'):
+        return []
+    problems = []
+    if expected.get('responseSchema') != 'success':
+        problems.append(f'the {status} response has a documented body; set responseSchema to "success".')
+    if not expected.get('bodyChecks'):
+        problems.append(f'the {status} response has a documented body; add bodyChecks for the fields this case is about, '
+                        'not only the status code.')
+    return problems
+
+
 def unit_case_problems(case: dict, endpoint: dict, security_schemes: dict | None = None) -> list[str]:
     """Problems in one written unit case; an empty list means it may go to the reviewer."""
     request, expected = case.get('request') or {}, case.get('expected') or {}
@@ -91,6 +105,7 @@ def unit_case_problems(case: dict, endpoint: dict, security_schemes: dict | None
     status = expected.get('status')
     if status and str(status) not in endpoint.get('responses', {}):
         problems.append(f'status {status} is not documented for this endpoint.')
+    problems += response_check_problems(expected, endpoint)
     if case.get('category') == 'positive' and request.get('body') is not None:
         schema = (endpoint.get('requestBody') or {}).get('schema')
         problems += [f'the valid request breaks the schema: {p}.' for p in schema_problems(request['body'], schema)[:8]]

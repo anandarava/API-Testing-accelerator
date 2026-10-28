@@ -32,7 +32,7 @@ class OperationAccess(Strict):
 
 
 class AccessRule(Strict):
-    rule: str = Field(max_length=500, description='e.g. "Patients see only FINAL lab results"')
+    rule: str = Field(max_length=500, description='e.g. "Customers see only PUBLISHED documents"')
     kind: Literal['ownership', 'hidden_data', 'protected_field', 'other']
     operations: list[str] = Field(default_factory=list)
     roles: list[str] = Field(default_factory=list)

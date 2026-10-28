@@ -1,0 +1,14 @@
+flowchart TD
+    A(["Upload the API spec"]) --> B["Portal reads the spec<br/>endpoints, schemas, statuses, security"]
+    B --> U["<b>Unit test cases</b><br/>unit-scenario-planner<br/>unit-case-writer<br/>unit-case-reviewer"]
+    B --> F["<b>Flow test cases</b><br/>flow-domain-analyst<br/>flow-process-analyst<br/>flow-designer<br/>flow-case-writer<br/>flow-reviewer"]
+    R0(["Upload the roles file"]) --> R1["<b>Role analysis</b><br/>access-control-analyst"]
+    R1 --> R2["QA confirms the permission grid"]
+    R2 --> R["<b>Role test cases</b><br/>role-case-designer<br/>role-case-reviewer"]
+    U -. "positive unit case<br/>is reused" .-> R
+    F -. "business rules<br/>are reused" .-> U
+    U --> Q["QA reviews and approves"]
+    F --> Q
+    R --> Q
+    Q --> S["<b>Playwright scripts</b><br/>framework-analyzer<br/>script-writer<br/>script-fixer"]
+    S --> E(["Scripts saved in the<br/>team's test framework"])

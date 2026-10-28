@@ -1,0 +1,27 @@
+flowchart TD
+    A(["QA clicks Design flows"]) --> A1{"Redesign everything<br/>or Fill gaps?"}
+    A1 -- "Fill gaps" --> FG["<b>Reuse the saved analysis and flows</b><br/>If processes are missing, list them:<br/>Agent: flow-process-analyst<br/>Uncovered processes get journeys first"]
+    A1 -- "Redesign everything" --> B["<b>Analyse the business domain:<br/>records, states, rules, side effects</b><br/>Agent: flow-domain-analyst<br/>Skills: none"]
+    B --> C["<b>Split the operations into business areas</b><br/><i>Code, no AI</i>"]
+    C --> D["<b>List the end-to-end business processes</b><br/>Agent: flow-process-analyst<br/>Skills: none"]
+    D --> E["<b>Build the coverage checklist</b><br/><i>Code, no AI</i><br/>operations, id hand-offs, state changes,<br/>rules, side effects, processes"]
+    E --> G["Design the groups at the same time, up to 5:<br/>Cross-area journeys + one group per business area"]
+    G --> H["<b>Plan the flows of the group</b><br/>Agent: flow-designer<br/>Skills: api-flow-design, api-flow-edge-cases"]
+    H --> I{"Plan checks pass?"}
+    I -- "No: fix once,<br/>then drop" --> H
+    I -- Yes --> J["<b>Write the detailed flows</b><br/>Agent: flow-case-writer<br/>Skills: api-test-data"]
+    J --> K{"Code checks pass?"}
+    K -- "No: retry once,<br/>then drop" --> J
+    K -- Yes --> L["<b>Review the flows</b><br/>Agent: flow-reviewer<br/>Skills: api-flow-design, api-flow-edge-cases"]
+    L --> M{"Blocker or major findings?"}
+    M -- "Yes, up to 2 fix rounds" --> N["<b>Add suggested flows</b><br/>Agent: flow-designer<br/>Skills: api-flow-design, api-flow-edge-cases"]
+    N --> N2["<b>Rewrite the flagged flows</b><br/>Agent: flow-case-writer<br/>Skills: api-test-data"]
+    N2 --> N3["<b>Re-review the changed flows</b><br/>Agent: flow-reviewer<br/>Skills: api-flow-design, api-flow-edge-cases"]
+    N3 --> M
+    M -- No --> O["Portal saves the group,<br/>its coverage and its review"]
+    O --> P{"All groups done.<br/>Anything not covered?"}
+    FG --> P
+    P -- "Yes, up to 2 tries" --> Q["<b>Design flows for the gaps</b><br/>Agent: flow-designer<br/>Skills: api-flow-design, api-flow-edge-cases"]
+    Q --> Q2["Write, check and review them<br/>as in the steps above"]
+    Q2 --> R
+    P -- No --> R(["Flows saved as In review,<br/>AI reviewer shown per area"])

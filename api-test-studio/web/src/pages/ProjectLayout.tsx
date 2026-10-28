@@ -4,6 +4,7 @@ import { ArrowLeft, FileCode, FolderCog, History, ListChecks, Network, Settings,
 import { ApiError } from '../lib/api';
 import { useProject } from '../lib/queries';
 import { Card, EmptyState, RoleBadge, Spinner, cx } from '../components/ui';
+import { Assistant } from '../components/Assistant';
 
 export function ProjectLayout() {
   const project = useProject();
@@ -50,6 +51,7 @@ export function ProjectLayout() {
       <main className="min-w-0 flex-1 overflow-y-auto">
         <MobileNav lead={lead} />
         <div className="mx-auto max-w-6xl px-4 py-8 sm:px-8"><Outlet /></div>
+        <Assistant />
       </main>
     </div>
   );

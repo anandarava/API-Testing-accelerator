@@ -226,8 +226,9 @@ def friendly_failure(status_code: int, text: str) -> str:
 class _Call:
     """One agent call: the conversation, its usage and the request settings."""
 
-    def __init__(self, agent: str, model: str, client: httpx.Client, config: dict, deadline: float):
+    def __init__(self, agent: str, model: str, client: httpx.Client, config: dict, deadline: float, meter=job_model):
         self.agent, self.model, self.client, self.config, self.deadline = agent, model, client, config, deadline
+        self.meter = meter
         self.name = model[len(LOCAL_MODEL_PREFIX):]
 
     def send(self, messages: list, tools: list | None, schema: dict | None) -> dict:
@@ -260,7 +261,7 @@ class _Call:
         except (ValueError, KeyError, IndexError, TypeError) as exc:
             raise ClaudeError('The local AI server sent an answer in an unexpected format.') from exc
         usage = reply.get('usage') or {}
-        job_model.record({'modelUsage': {self.model: {'inputTokens': usage.get('prompt_tokens') or 0,
+        self.meter.record({'modelUsage': {self.model: {'inputTokens': usage.get('prompt_tokens') or 0,
                                                       'outputTokens': usage.get('completion_tokens') or 0}}}, self.agent)
         if (usage.get('prompt_tokens') or 0) >= self.config['context'] - 16:
             raise ClaudeError('The task is too long for the local model\'s context window (STUDIO_LLM_CONTEXT='
@@ -272,7 +273,8 @@ class _Call:
 
 
 def run_agent(agent: str, task: dict, schema: type[BaseModel], cwd: str | Path, tools: tuple[str, ...] = (),
-              timeout: int | None = None, max_turns: int = 40, model: str = '', client: httpx.Client | None = None) -> dict:
+              timeout: int | None = None, max_turns: int = 40, model: str = '', client: httpx.Client | None = None,
+              meter=None) -> dict:
     """Run one agent on the local server and return output validated against ``schema``."""
     config = settings()
     if not config['baseUrl']:
@@ -285,7 +287,8 @@ def run_agent(agent: str, task: dict, schema: type[BaseModel], cwd: str | Path, 
     messages = [{'role': 'system', 'content': agent_prompt(agent) + _output_rules(schema, bool(specs))},
                 {'role': 'user', 'content': task_prompt(task)}]
     own = client or httpx.Client()
-    call = _Call(agent, model, own, config, time.time() + timeout)
+    meter = meter or job_model
+    call = _Call(agent, model, own, config, time.time() + timeout, meter)
     corrections, turns, use_tools = 0, 0, bool(specs)
     try:
         while True:
@@ -322,7 +325,7 @@ def run_agent(agent: str, task: dict, schema: type[BaseModel], cwd: str | Path, 
                              {'role': 'user', 'content': 'That answer is not valid for the required JSON schema: '
                                                          f'{str(exc)[:1500]}\nReply again with only the corrected, complete JSON object.'}]
     except ClaudeError:
-        job_model.fail(agent)
+        meter.fail(agent)
         raise
     finally:
         if client is None:

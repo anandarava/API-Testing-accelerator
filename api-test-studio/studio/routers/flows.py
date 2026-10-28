@@ -94,6 +94,8 @@ def resume_state(db: DbSession, project_id: str, spec=None) -> dict | None:
     if (not job or job.status not in ('failed', 'cancelled') or not analysis or analysis.job_id != job.id
             or not spec or spec.sha256 != analysis.spec_sha256 or not analysis.domain):
         return None
+    if (job.input or {}).get('fillGaps'):
+        return None  # filling gaps is simply started again; it only designs what is still missing
     lineage = _lineage(job)
     jobs = db.scalars(select(Job).where(Job.id.in_(lineage))).all()
     done = list(dict.fromkeys(name for j in sorted(jobs, key=lambda j: j.created_at)
@@ -131,9 +133,35 @@ def continue_generation(project_id: str, db: DbSession = Depends(get_db), user: 
     return job_json(job, user.name)
 
 
+@router.post('/fill-gaps')
+def fill_gaps(project_id: str, db: DbSession = Depends(get_db), user: User = Depends(current_user)):
+    """Add flows for every coverage requirement the current flows do not cover; no existing flow is changed."""
+    project, spec = _check_can_start(db, project_id, user)
+    analysis = db.get(FlowAnalysis, project_id)
+    if not analysis or not analysis.domain:
+        raise HTTPException(409, 'Design the flows first; filling gaps builds on that analysis.')
+    if spec.sha256 != analysis.spec_sha256:
+        raise HTTPException(409, 'The API spec changed after these flows were designed. Redesign the flows first.')
+    job = _new_job(db, project_id, user, spec, fillGaps={'domain': analysis.domain, 'outlines': _outlines(db, project_id)})
+    db.flush()
+    analysis.job_id = job.id  # the new flows are added to this design
+    record(db, project, user, 'flows.gaps_started',
+           f'{user.name} asked to fill the coverage gaps of the flow design, keeping the existing flows')
+    db.commit()
+    return job_json(job, user.name)
+
+
 def _outlines(db: DbSession, project_id: str) -> list[dict]:
     """Validated outlines of the current flows; the server computes coverage from these."""
     return [c.content['outline'] for c in flow_cases(db, project_id) if c.content.get('outline')]
+
+
+def refresh_coverage(db: DbSession, project_id: str):
+    """Recompute which requirements no flow covers, after flows were added, edited or deleted."""
+    analysis = db.get(FlowAnalysis, project_id)
+    if analysis and analysis.requirements:
+        db.flush()
+        analysis.gaps = [r['id'] for r in gaps(analysis.requirements, _outlines(db, project_id))]
 
 
 def _store_domain(db: DbSession, job: Job, user: User, parsed: FlowAnalysisResult, endpoints: list[dict]):
@@ -155,8 +183,53 @@ def _store_domain(db: DbSession, job: Job, user: User, parsed: FlowAnalysisResul
     analysis.generated_by, analysis.generated_at = user.id, time.time()
     db.merge(analysis)
     record(db, db.get(Project, job.project_id), user, 'flows.domain_analyzed',
-           f'Claude analyzed the API: {len(domain["entities"])} entities, {len(domain["businessRules"])} business rules, '
-           f'{len(domain.get("areas", []))} business areas')
+           f'The AI analyzed the API: {len(domain["entities"])} entities, {len(domain["businessRules"])} business rules, '
+           f'{len(domain.get("areas", []))} business areas, {len(domain.get("processes", []))} business processes')
+
+
+def _store_processes(db: DbSession, job: Job, user: User, parsed: FlowAnalysisResult, endpoints: list[dict]):
+    """Business processes found for an existing design: they become end-to-end coverage requirements."""
+    analysis = db.get(FlowAnalysis, job.project_id)
+    if not analysis or analysis.job_id != job.id:
+        raise HTTPException(409, 'This job no longer owns the flow design.')
+    processes = [p.model_dump() for p in parsed.processes]
+    analysis.domain = {**analysis.domain, 'processes': processes}
+    analysis.requirements = requirements(endpoints, analysis.dependencies or dependencies(endpoints), analysis.domain)
+    analysis.gaps = [r['id'] for r in gaps(analysis.requirements, _outlines(db, job.project_id))]
+    record(db, db.get(Project, job.project_id), user, 'flows.processes_found',
+           f'Found {len(processes)} business processes for end-to-end coverage')
+
+
+def add_flow_case(db: DbSession, project_id: str, user: User, outline: dict, flow: dict, area: str, spec_version: int,
+                  job_id: str | None, findings: list, **extra) -> TestCase:
+    """Save one checked flow (its outline and detailed steps) as a flow test case in review."""
+    content = {key: flow[key] for key in ('objective', 'preconditions', 'steps', 'testData', 'cleanup')}
+    content.update(goal=outline['goal'], covers=outline['covers'], outline=outline, area=area,
+                   confirmationNote=flow['confirmationNote'] or outline['confirmationNote'],
+                   operations=[s['operationId'] for s in flow['steps']], **extra)
+    case = TestCase(project_id=project_id, module='flow', number=next_number(db, project_id), method=FLOW_METHOD,
+                    path=flow['flowKey'], operation_id='', spec_version=spec_version, scenario_key=flow['flowKey'],
+                    title=flow['title'], category=flow['type'], priority=flow['priority'],
+                    needs_confirmation=flow['needsConfirmation'] or outline['needsConfirmation'], content=content,
+                    findings=findings, source_job_id=job_id, created_by=user.id, updated_by=user.id)
+    db.add(case)
+    return case
+
+
+def merge_review(current: dict | None, review: dict, area: str) -> dict:
+    """Add one design group's review to the design's review, keeping each business area's summary apart."""
+    combined = dict(current or {'verdict': 'ready', 'summary': '', 'findings': []})
+    combined['verdict'] = 'ready' if combined['verdict'] == 'ready' and review['verdict'] == 'ready' else 'needs_attention'
+    combined['summary'] = ' '.join(filter(None, [combined['summary'], f"{area}: {review['summary']}"]))[:800]
+    combined['findings'] = (combined['findings'] + [{**f, 'area': area} for f in review['findings']])[:400]
+    areas = {a['name']: dict(a) for a in combined.get('areas', [])}
+    before = areas.get(area, {'name': area, 'verdict': 'ready', 'summary': '', 'strengths': []})
+    areas[area] = {'name': area,
+                   'verdict': 'ready' if before['verdict'] == 'ready' and review['verdict'] == 'ready' else 'needs_attention',
+                   'summary': ' '.join(filter(None, [before['summary'], review['summary']]))[:1200],
+                   'strengths': list(dict.fromkeys(before['strengths'] + review.get('strengths', [])))[:8]}
+    combined['areas'] = list(areas.values())
+    return combined
 
 
 def _store_flows(db: DbSession, job: Job, user: User, parsed: FlowAnalysisResult, endpoints: list[dict]):
@@ -182,38 +255,16 @@ def _store_flows(db: DbSession, job: Job, user: User, parsed: FlowAnalysisResult
         if not outline or flow['title'].casefold() in approved_titles or flow['flowKey'] in this_job:
             continue
         added += 1
-        content = {key: flow[key] for key in ('objective', 'preconditions', 'steps', 'testData', 'cleanup')}
-        content.update(goal=outline['goal'], covers=outline['covers'], outline=outline, area=group,
-                       confirmationNote=flow['confirmationNote'] or outline['confirmationNote'],
-                       operations=[s['operationId'] for s in flow['steps']])
-        db.add(TestCase(project_id=job.project_id, module='flow', number=next_number(db, job.project_id), method=FLOW_METHOD,
-                        path=flow['flowKey'], operation_id='', spec_version=job.input['specVersion'], scenario_key=flow['flowKey'],
-                        title=flow['title'], category=flow['type'], priority=flow['priority'],
-                        needs_confirmation=flow['needsConfirmation'] or outline['needsConfirmation'], content=content,
-                        findings=findings.get(flow['flowKey'], []), source_job_id=job.id, created_by=user.id, updated_by=user.id))
+        add_flow_case(db, job.project_id, user, outline, flow, group, job.input['specVersion'], job.id, findings.get(flow['flowKey'], []))
     db.flush()
     if parsed.stage == 'group' and group:
         finished = (job.result or {}).get('groups', [])
         job.result = {**(job.result or {}), 'groups': [*finished, group] if group not in finished else finished}
     analysis.gaps = [r['id'] for r in gaps(analysis.requirements, _outlines(db, job.project_id))]
-    resumed = bool((job.input or {}).get('resume'))
-    if parsed.stage == 'final' and not resumed:
-        analysis.review, analysis.rounds = review, parsed.rounds
-    elif parsed.stage == 'final':
-        # A continued design already holds the reviews of earlier areas; add only what this final step found.
+    if parsed.stage == 'final':
         analysis.rounds = parsed.rounds
-        if review:
-            combined = dict(analysis.review or {'verdict': 'ready', 'summary': '', 'findings': []})
-            combined['verdict'] = 'ready' if combined['verdict'] == 'ready' and review['verdict'] == 'ready' else 'needs_attention'
-            combined['summary'] = ' '.join(filter(None, [combined['summary'], review['summary']]))[:800]
-            combined['findings'] = (combined['findings'] + review['findings'])[:60]
-            analysis.review = combined
-    elif review:
-        combined = dict(analysis.review or {'verdict': 'ready', 'summary': '', 'findings': []})
-        combined['verdict'] = 'ready' if combined['verdict'] == 'ready' and review['verdict'] == 'ready' else 'needs_attention'
-        combined['summary'] = ' '.join(filter(None, [combined['summary'], f"{group}: {review['summary']}"]))[:800]
-        combined['findings'] = (combined['findings'] + review['findings'])[:60]
-        analysis.review = combined
+    if review and (review['summary'] or review['findings']):  # an empty step (nothing to fill) adds no area
+        analysis.review = merge_review(analysis.review, review, group)
     covered = len(analysis.requirements) - len(analysis.gaps)
     where = 'to close coverage gaps' if parsed.stage == 'final' else f'for {group}'
     record(db, db.get(Project, job.project_id), user, 'flows.generated',
@@ -226,6 +277,8 @@ def store_flow_result(db: DbSession, job: Job, user: User, result: dict):
     endpoints = [item['details'] for item in job.input['endpoints']]
     if parsed.stage == 'domain':
         _store_domain(db, job, user, parsed, endpoints)
+    elif parsed.stage == 'processes':
+        _store_processes(db, job, user, parsed, endpoints)
     else:
         _store_flows(db, job, user, parsed, endpoints)
 
@@ -287,6 +340,7 @@ def edit_flow(project_id: str, case_id: str, body: FlowEdit, db: DbSession = Dep
     case.content, case.title, case.category, case.priority = content, body.title.strip(), body.type, body.priority
     previous = case.status
     case.status, case.revision, case.updated_by, case.updated_at = 'in_review', case.revision + 1, user.id, time.time()
+    refresh_coverage(db, project_id)  # the edited steps may cover more or less than before
     note = ' and moved it back to review' if previous == 'approved' else ''
     record(db, project, user, 'flows.case_edited', f'{user.name} edited {code(case)} {case.title}{note}', caseId=case.id)
     db.commit()

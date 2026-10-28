@@ -68,9 +68,22 @@ timeline** and which values pass from one step to the next. This takes 10–30 m
 
 Besides journeys and status changes, Claude checks the edge cases of each business rule by its kind: duplicates, competing requests, idempotent retries, locked records (a signed or completed record refuses changes), wrong-order status changes, money totals, side effects (what else changes is read back) and webhooks. A requirement only counts as covered when the flow really contains the proof, for example a refused step for a uniqueness rule. Rules that need test support (a test clock, a signing secret) are marked *Confirm results* with a note saying what is needed.
 
+**End-to-end coverage of the whole application.** The analysis lists every business process (for
+example "a prescription is dispensed by the pharmacy" or "an administrator onboards a doctor and
+patients book them"), and each one gets an end-to-end flow under *Cross-area journeys*. Check them on
+the **Business processes** tab of *API analysis & coverage*: a process is covered when a flow makes its
+highlighted key calls in order.
+
+**Design flows ▾** (once flows exist) has two options:
+- **Fill gaps (keep existing flows)**: adds flows only for what is not covered yet: business processes
+  without an end-to-end flow, rules, status changes, endpoints. Every existing flow stays as it is. Use it
+  after deleting flows, or for designs made before business processes existed.
+- **Redesign everything**: analyses the API again and replaces every flow that is not approved (it asks
+  first). Use it when the API changed a lot.
+
 If the design stops part-way (for example when your Claude usage or spend limit is reached), finished
 areas stay saved. Click **Continue generation** after the limit resets: Claude designs only the remaining
-areas and then checks coverage across all flows. **Redesign flows** starts over instead.
+areas and then checks coverage across all flows. **Design flows → Redesign everything** starts over instead.
 
 ### Role test cases (who may do what)
 **Role test cases** → upload your **roles file**: the roles of your application and what each may and may
@@ -134,6 +147,17 @@ Commit and raise a pull request as your team normally does.
 ### Export for sign-off
 **Unit test cases** or **Flow test cases** → **Export** → *Excel — approved only* gives a workbook
 with one sheet for unit cases and one for flows, ready to share.
+
+### Ask the project assistant
+Click **Ask** (bottom right of every project page). It runs on your computer, so your helper must be
+running.
+- **Ask anything about the project**: "Which business processes have no end-to-end flow?", "Which flows
+  use the cancel endpoint?", "Summarise the review notes for Billing". Click a TC code to open that case.
+- **Ask it to do something**: "Approve the happy path flows in Billing that have no review notes",
+  "Regenerate TC-0205 so it includes sample collection", "Export the approved flows". It shows what it will
+  do as a card; nothing happens until you click **Confirm**.
+- **Tell it about a flow it missed**: describe the journey in your own words. It drafts the flow, runs
+  the same checks as generation, and shows it with **Add to flows**. Added flows go to review like any other.
 
 ---
 

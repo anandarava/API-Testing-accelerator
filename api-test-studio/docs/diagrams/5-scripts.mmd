@@ -1,0 +1,8 @@
+flowchart TD
+    A(["QA connects the local test framework"]) --> B["<b>Study the framework: folders,<br/>helpers, naming, auth, config</b><br/>Agent: framework-analyzer<br/>Skills: playwright-framework-conventions"]
+    B --> C(["QA selects approved cases<br/>and clicks Generate scripts"])
+    C --> D["<b>Write the Playwright spec file</b><br/>Agent: script-writer<br/>Skills: playwright-script-standards,<br/>playwright-framework-conventions"]
+    D --> E{"Checks pass?<br/>safe code, every case present,<br/>TypeScript, lint, test discovery"}
+    E -- "No, up to 2 fix rounds" --> F["<b>Fix the reported problems</b><br/>Agent: script-fixer<br/>Skills: playwright-script-standards"]
+    F --> E
+    E -- Yes --> G(["File saved in the framework,<br/>diff shown in the portal"])

@@ -7,6 +7,7 @@
 """
 import argparse
 import socket
+import threading
 import sys
 from urllib.parse import urlparse
 
@@ -81,6 +82,9 @@ def start(_args):
         print(f'Note: {local.error} Jobs on local models will fail until this is fixed.')
     print(f"Local Helper {VERSION} connected to {saved['server']} as {saved['user']['name']}. Press Ctrl+C to stop.")
     with httpx.Client(base_url=saved['server'], headers={'Authorization': 'Bearer ' + saved['token']}, timeout=60) as client:
+        # The project assistant answers on its own lane, so questions never wait for a long generation.
+        lane = Helper(client, log=lambda message: print(f'[assistant] {message.strip()}'), lane='assistant')
+        threading.Thread(target=lane.run_forever, daemon=True, name='assistant-lane').start()
         try:
             Helper(client).run_forever()
         except (PairingRevoked, VersionMismatch) as exc:

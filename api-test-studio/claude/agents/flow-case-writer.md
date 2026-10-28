@@ -27,11 +27,13 @@ Return one detailed flow per outline with the same `flowKey`, `type` and `priori
 - `preconditions`: what must exist before step 1 (credentials, seed data).
 - For every step, in order:
   - `request`: concrete values following the `api-test-data` skill. Values from earlier steps are
-    written as `{{steps.S1.petId}}`; unique values as `{{unique.name}}`; credentials only through
+    written as `{{steps.S1.orderId}}`; unique values as `{{unique.name}}`; credentials only through
     `request.auth`.
   - `expected`: the documented status, which schema to validate, and `bodyChecks` that prove the
     step's purpose (e.g. after an update, `$.status` equals the new value; after a create,
-    `$.name` matches the request).
+    `$.name` matches the request). A 2xx step with a documented response body must use
+    `responseSchema` `success` and at least one `bodyCheck` (at least `exists` on what it
+    captures); a status-only step is rejected.
   - `captures`: the values later steps use.
 - After a step that changes state, the read step's `bodyChecks` prove the new state; after a
   refused step, the read step proves nothing changed.

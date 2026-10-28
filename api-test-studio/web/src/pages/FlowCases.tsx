@@ -1,8 +1,8 @@
-import { useEffect, useMemo, useState } from 'react';
-import { Link } from 'react-router';
+import { useEffect, useMemo, useRef, useState } from 'react';
+import { Link, useSearchParams } from 'react-router';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
-import { ArrowDown, ChevronDown, CircleCheck, Play, CircleHelp, CircleX, MessageSquareWarning, Pencil, RotateCcw, Search, Sparkles, Trash2, Workflow } from 'lucide-react';
-import { api, type CaseStatus, type FlowCase, type FlowsOverview } from '../lib/api';
+import { ArrowDown, Check, ChevronDown, CircleCheck, Play, CircleHelp, CircleX, MessageSquareWarning, Pencil, RotateCcw, Route, Search, Sparkles, Trash2, Workflow } from 'lucide-react';
+import { api, type CaseStatus, type FlowCase, type FlowReviewData, type FlowsOverview, type ReviewFinding } from '../lib/api';
 import { jobActive, useHelper, useProjectId, useFlows } from '../lib/queries';
 import { plural } from '../lib/format';
 import { AUTH_LABEL, PriorityBadge, STATUS_LABEL, StatusBadge, statusTone, PRIORITY_LABEL } from '../components/cases';
@@ -31,7 +31,9 @@ export function FlowCasesPage() {
   const [filter, setFilter] = useState<Filter>('all');
   const [search, setSearch] = useState('');
   const [selected, setSelected] = useState<Set<string>>(new Set());
-  const [open, setOpen] = useState<string | null>(null);
+  const [params] = useSearchParams();
+  const [open, setOpen] = useState<string | null>(params.get('open'));
+  useEffect(() => { if (params.get('open')) setOpen(params.get('open')); }, [params]);  // links from the assistant
   const [dialog, setDialog] = useState<'needs_changes' | 'reject' | 'confirm_approve' | 'confirm_redesign' | null>(null);
   const [connecting, setConnecting] = useState(false);
   const refresh = () => client.invalidateQueries({ queryKey: ['project', projectId] });
@@ -43,6 +45,11 @@ export function FlowCasesPage() {
   const resume = useMutation({
     mutationFn: () => api.post(`/projects/${projectId}/flows/continue`),
     onSuccess: () => { void refresh(); toast.success('Continuing the design on your computer. Finished areas are kept.'); },
+    onError: toast.error,
+  });
+  const fillGaps = useMutation({
+    mutationFn: () => api.post(`/projects/${projectId}/flows/fill-gaps`),
+    onSuccess: () => { void refresh(); toast.success('Filling the coverage gaps on your computer. Existing flows are kept.'); },
     onError: toast.error,
   });
   const cancel = useMutation({ mutationFn: (jobId: string) => api.post(`/projects/${projectId}/jobs/${jobId}/cancel`), onSuccess: refresh, onError: toast.error });
@@ -71,6 +78,10 @@ export function FlowCasesPage() {
   const toggle = (id: string) => setSelected((s) => { const n = new Set(s); if (n.has(id)) n.delete(id); else n.add(id); return n; });
   const unconfirmed = all.filter((f) => selected.has(f.id) && f.needsConfirmation).length;
   const hasOperations = Object.keys(data.operations).length > 0;
+  const uncovered = data.analysis ? data.analysis.total - data.analysis.covered : 0;
+  const processesKnown = (data.analysis?.domain.processes ?? []).length > 0;
+  const notApproved = all.filter((f) => f.status !== 'approved').length;
+  const offline = !helper.data?.connected;
 
   return (
     <>
@@ -79,9 +90,15 @@ export function FlowCasesPage() {
         action={hasOperations && (
           <div className="flex gap-2">
           {all.length > 0 && <ExportMenu module="flow" />}
-          <Button variant={all.length ? 'secondary' : 'primary'} icon={<Sparkles className="size-4" />} loading={generate.isPending}
-            disabled={!helper.data?.connected || running} title={!helper.data?.connected ? 'Connect your computer first' : undefined}
-            onClick={() => (data.resume ? setDialog('confirm_redesign') : generate.mutate())}>{all.length ? 'Redesign flows' : 'Analyze APIs & design flows'}</Button>
+          {data.analysis ? (
+            <DesignMenu disabled={offline || running} loading={generate.isPending || fillGaps.isPending}
+              title={offline ? 'Connect your computer first' : running ? 'A design is running' : undefined}
+              canFill={!data.analysis.outdated} uncovered={uncovered} processesKnown={processesKnown} notApproved={notApproved}
+              onFill={() => fillGaps.mutate()} onRedesign={() => setDialog('confirm_redesign')} />
+          ) : (
+            <Button icon={<Sparkles className="size-4" />} loading={generate.isPending} disabled={offline || running}
+              title={offline ? 'Connect your computer first' : undefined} onClick={() => generate.mutate()}>Analyze APIs &amp; design flows</Button>
+          )}
           </div>
         )} />
 
@@ -120,7 +137,7 @@ export function FlowCasesPage() {
         {data.analysis && (
           <>
             <ApiOverview analysis={data.analysis} operations={data.operations} flows={all} job={data.job} onOpenFlow={setOpen} />
-            <ReviewCard analysis={data.analysis} />
+            <ReviewCard analysis={data.analysis} flows={all} onOpenFlow={setOpen} />
           </>
         )}
 
@@ -128,6 +145,9 @@ export function FlowCasesPage() {
           <div className="space-y-3">
           <Card className="sticky top-0 z-10">
             <div className="flex flex-wrap items-center gap-2 px-5 py-3">
+              <label className="mr-2 flex cursor-pointer items-center gap-2 border-r border-line pr-4 text-sm text-ink-soft">
+                <input type="checkbox" className="size-4 accent-brand-600" checked={allSelected} onChange={() => setSelected(allSelected ? new Set() : new Set(visible.map((f) => f.id)))} /> Select all
+              </label>
               <label className="relative mr-1">
                 <span className="sr-only">Search flows</span>
                 <Search className="pointer-events-none absolute left-2.5 top-1/2 size-4 -translate-y-1/2 text-muted" />
@@ -142,9 +162,6 @@ export function FlowCasesPage() {
                   {value === 'all' ? 'All' : STATUS_LABEL[value]} <span className="opacity-70">{value === 'all' ? all.length : data.totals[value] ?? 0}</span>
                 </button>
               ))}
-              <label className="ml-auto flex cursor-pointer items-center gap-2 text-sm text-ink-soft">
-                <input type="checkbox" className="size-4 accent-brand-600" checked={allSelected} onChange={() => setSelected(allSelected ? new Set() : new Set(visible.map((f) => f.id)))} /> Select all
-              </label>
             </div>
             {selected.size > 0 && (
               <div className="flex flex-wrap items-center gap-2 rounded-b-xl border-t border-line bg-brand-50/50 px-5 py-2.5 text-sm">
@@ -167,12 +184,13 @@ export function FlowCasesPage() {
       </div>
 
       {current && <FlowDrawer flow={current} regenerating={data.regenerating.includes(current.id)} operations={data.operations} onClose={() => setOpen(null)} onChanged={refresh} />}
-      {dialog === 'confirm_redesign' && data.resume && (
-        <Dialog title="Start the design over?" onClose={() => setDialog(null)}
-          description={`The last design stopped with ${data.resume.doneGroups} of ${data.resume.totalGroups} areas done. Continue generation keeps that work.`}
-          footer={<><Button variant="secondary" onClick={() => setDialog(null)}>Keep my work</Button>
-            <Button variant="secondary" loading={generate.isPending} onClick={() => generate.mutate()}>Start over</Button></>}>
-          <p className="text-sm text-muted">Starting over analyzes the API again and replaces every flow that is not approved.</p>
+      {dialog === 'confirm_redesign' && (
+        <Dialog title="Redesign everything?" onClose={() => setDialog(null)}
+          description={data.resume ? `The last design stopped with ${data.resume.doneGroups} of ${data.resume.totalGroups} areas done. Continue generation keeps that work.`
+            : `This analyzes the API again and replaces the ${plural(notApproved, 'flow')} that ${notApproved === 1 ? 'is' : 'are'} not approved.`}
+          footer={<><Button variant="secondary" onClick={() => setDialog(null)}>{data.resume ? 'Keep my work' : 'Cancel'}</Button>
+            <Button variant="danger" loading={generate.isPending} onClick={() => generate.mutate()}>Redesign everything</Button></>}>
+          <p className="text-sm text-muted">Approved flows are kept. To add only what is missing without replacing anything, use <span className="font-medium text-ink-soft">Fill gaps</span> instead.</p>
         </Dialog>
       )}
       {dialog === 'confirm_approve' && (
@@ -187,6 +205,48 @@ export function FlowCasesPage() {
       )}
       {connecting && <HelperDialog onClose={() => setConnecting(false)} />}
     </>
+  );
+}
+
+// --- Design menu ---------------------------------------------------------------------------------
+
+/** One button for an existing design: fill what is missing, or start over. */
+function DesignMenu({ disabled, loading, title, canFill, uncovered, processesKnown, notApproved, onFill, onRedesign }: {
+  disabled: boolean; loading: boolean; title?: string; canFill: boolean; uncovered: number; processesKnown: boolean; notApproved: number;
+  onFill: () => void; onRedesign: () => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const ref = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    const close = (event: MouseEvent) => ref.current && !ref.current.contains(event.target as Node) && setOpen(false);
+    document.addEventListener('mousedown', close);
+    return () => document.removeEventListener('mousedown', close);
+  }, []);
+  // Without business processes the coverage may look complete although end-to-end journeys were never checked.
+  const nothing = processesKnown && uncovered === 0;
+  const fillHint = !canFill ? 'The API spec changed after this design. Redesign to cover the new contract.'
+    : nothing ? 'Nothing to fill: every coverage requirement is covered.'
+      : processesKnown ? `${uncovered} coverage requirement${uncovered === 1 ? '' : 's'} not covered yet. Existing flows are kept.`
+        : 'Finds the business processes, then adds flows for everything not covered. Existing flows are kept.';
+  const item = 'flex w-full cursor-pointer items-start gap-3 rounded-lg px-3 py-2.5 text-left hover:bg-canvas disabled:cursor-not-allowed disabled:opacity-50 disabled:hover:bg-transparent';
+  return (
+    <div className="relative" ref={ref}>
+      <Button icon={<Sparkles className="size-4" />} loading={loading} disabled={disabled} title={title} onClick={() => setOpen(!open)}
+        aria-expanded={open}>Design flows <ChevronDown className="size-4" /></Button>
+      {open && (
+        <div className="absolute right-0 top-11 z-20 w-80 rounded-xl border border-line bg-surface p-1.5 shadow-lg animate-pop-in" role="menu">
+          <button role="menuitem" className={item} disabled={!canFill || nothing} onClick={() => { setOpen(false); onFill(); }}>
+            <Route className="mt-0.5 size-4 shrink-0 text-brand-600" />
+            <span><span className="block text-sm font-medium text-ink">Fill gaps</span><span className="text-xs text-muted">{fillHint}</span></span>
+          </button>
+          <button role="menuitem" className={item} onClick={() => { setOpen(false); onRedesign(); }}>
+            <RotateCcw className="mt-0.5 size-4 shrink-0 text-ink-soft" />
+            <span><span className="block text-sm font-medium text-ink">Redesign everything</span>
+              <span className="text-xs text-muted">Analyzes the API again and replaces the {notApproved === 1 ? 'flow' : `${notApproved} flows`} that {notApproved === 1 ? 'is' : 'are'} not approved.</span></span>
+          </button>
+        </div>
+      )}
+    </div>
   );
 }
 
@@ -222,7 +282,7 @@ export function groupFlows(flows: FlowCase[], domainAreas: { name: string; descr
   }).filter((group) => group.flows.length);
 }
 
-function GroupCheckbox({ ids, selected, setSelected, label }: { ids: string[]; selected: Set<string>; setSelected: (s: Set<string>) => void; label: string }) {
+export function GroupCheckbox({ ids, selected, setSelected, label }: { ids: string[]; selected: Set<string>; setSelected: (s: Set<string>) => void; label: string }) {
   const count = ids.filter((id) => selected.has(id)).length;
   const all = count === ids.length;
   return (
@@ -365,11 +425,44 @@ function FlowRow({ flow, grouped = false, regenerating, operations, checked, onT
 
 const shortPath = (path: string) => path.replace(/\{([^}]+)\}/g, ':$1');
 
-function ReviewCard({ analysis }: { analysis: NonNullable<FlowsOverview['analysis']> }) {
+interface ReviewArea { name: string; label: string; verdict: 'ready' | 'needs_attention'; summary: string; strengths: string[];
+  issues: ReviewFinding[]; suggestions: ReviewFinding[] }
+
+const SEVERITY_TONE: Record<string, 'red' | 'amber' | 'gray'> = { blocker: 'red', major: 'amber', minor: 'gray' };
+const SEVERITY_ORDER: Record<string, number> = { blocker: 0, major: 1, minor: 2 };
+
+/** The review per business area, in the order of the analysis; older reviews without areas become one "All areas" group. */
+function reviewAreas(review: FlowReviewData, domainAreas: { name: string }[]): ReviewArea[] {
+  const bySeverity = (a: ReviewFinding, b: ReviewFinding) => (SEVERITY_ORDER[a.severity] ?? 3) - (SEVERITY_ORDER[b.severity] ?? 3);
+  const label = (name: string) => (name === 'Coverage gaps' ? EXTRA : name);
+  const build = (name: string, verdict: ReviewArea['verdict'], summary: string, strengths: string[], findings: ReviewFinding[]): ReviewArea => ({
+    name, label: label(name), verdict, summary, strengths,
+    issues: findings.filter((f) => f.flowKey !== 'plan').sort(bySeverity),
+    suggestions: findings.filter((f) => f.flowKey === 'plan').sort(bySeverity),
+  });
+  if (!review.areas?.length) return [build('', review.verdict, review.summary, review.strengths ?? [], review.findings)];
+  const rank = new Map([...domainAreas.map((a) => a.name), JOURNEYS, 'Coverage gaps'].map((name, i) => [name, i]));
+  return [...review.areas].sort((a, b) => (rank.get(a.name) ?? 99) - (rank.get(b.name) ?? 99))
+    .map((a) => build(a.name, a.verdict, a.summary, a.strengths, review.findings.filter((f) => f.area === a.name)));
+}
+
+/** A short name for a suggestion from an older review that has no title of its own. */
+const shortTitle = (f: ReviewFinding) => f.title || (f.issue.split(/(?<=[.:;])\s/)[0] ?? f.issue).replace(/[.:;]$/, '').slice(0, 110);
+
+function ReviewCard({ analysis, flows, onOpenFlow }: { analysis: NonNullable<FlowsOverview['analysis']>; flows: FlowCase[]; onOpenFlow: (id: string) => void }) {
   const [open, setOpen] = useState(false);
+  const [pick, setPick] = useState(0);
+  const [expanded, setExpanded] = useState<number | null>(0);
   const review = analysis.review;
   if (!review) return null;
-  const plan = review.findings.filter((f) => f.flowKey === 'plan');
+  const areas = reviewAreas(review, analysis.domain.areas ?? []);
+  const area = areas[Math.min(pick, areas.length - 1)];
+  const count = (severity: string) => review.findings.filter((f) => f.severity === severity).length;
+  const suggested = review.findings.filter((f) => f.flowKey === 'plan').length;
+  const attention = areas.filter((a) => a.verdict !== 'ready').length;
+  const caseFor = (f: ReviewFinding) => flows.find((flow) => flow.scenarioKey === f.flowKey && (!area.name || flow.content.area === area.name));
+  const draft = (f: ReviewFinding) => window.dispatchEvent(new CustomEvent('assistant:ask', { detail:
+    `You missed this flow: ${shortTitle(f)}. Why: ${f.issue}` + ((f.steps ?? []).length ? ` Steps: ${f.steps!.join(' -> ')}` : f.suggestion ? ` ${f.suggestion}` : '') }));
   return (
     <Card>
       <button onClick={() => setOpen(!open)} aria-expanded={open}
@@ -378,18 +471,110 @@ function ReviewCard({ analysis }: { analysis: NonNullable<FlowsOverview['analysi
         <span className="min-w-0 flex-1">
           <span className="block text-sm font-semibold text-ink">AI reviewer</span>
           <span className="mt-0.5 block text-sm text-muted">
-            A second AI agent reviewed the flows like a QA lead.{plan.length > 0 && ` ${plural(plan.length, 'suggested flow')}.`}{!open && ' Click to read the review.'}
+            {areas.length > 1 ? `${attention} of ${areas.length} areas need attention · ` : ''}
+            {count('blocker') > 0 && `${count('blocker')} blocker · `}{count('major')} major · {count('minor')} minor · {plural(suggested, 'suggested flow')}
+            {!open && ' · Click to read the review.'}
           </span>
         </span>
         {review.verdict === 'ready' ? <Badge tone="green">Ready</Badge> : <Badge tone="amber">Needs attention</Badge>}
       </button>
-      {open && <div className="space-y-3 px-5 py-4">
-        <p className="text-sm leading-relaxed text-ink-soft">{review.summary}</p>
-        {plan.length > 0 && (
-          <div><p className="mb-1.5 text-sm font-medium text-ink">Suggested additional flows</p>
-            <ul className="space-y-2">{plan.map((f, i) => <li key={i} className="text-sm text-muted"><span className="text-ink-soft">{f.issue}</span>{f.suggestion && <> — {f.suggestion}</>}</li>)}</ul></div>
-        )}
-      </div>}
+      {open && (
+        <div className="flex flex-wrap">
+          {areas.length > 1 && (
+            <nav aria-label="Reviewed areas" className="flex-[1_1_240px] space-y-0.5 border-line p-3 md:max-w-[280px] md:border-r">
+              {areas.map((a, i) => {
+                const serious = a.issues.filter((f) => f.severity !== 'minor').length;
+                return (
+                  <button key={a.name} onClick={() => { setPick(i); setExpanded(0); }}
+                    className={cx('flex min-h-11 w-full cursor-pointer items-center gap-2.5 rounded-lg px-3 py-1.5 text-left',
+                      i === pick ? 'bg-brand-50 text-brand-700' : 'text-ink-soft hover:bg-canvas')}>
+                    <span className={cx('size-2 shrink-0 rounded-full', a.verdict === 'ready' ? 'bg-emerald-600' : 'bg-amber-500')} />
+                    <span className="min-w-0 flex-1 text-sm font-medium">{a.label}</span>
+                    <span className="shrink-0 text-xs text-muted">{a.verdict === 'ready' ? 'Ready' : serious ? `${serious} major` : 'Check'}</span>
+                  </button>
+                );
+              })}
+            </nav>
+          )}
+          <div className="min-w-0 flex-[999_1_520px] space-y-5 px-6 py-5">
+            <div>
+              <div className="flex flex-wrap items-center gap-2.5">
+                <h3 className="text-lg font-semibold text-ink">{area.label || 'All areas'}</h3>
+                {area.verdict === 'ready' ? <Badge tone="green">Ready</Badge> : <Badge tone="amber">Needs attention</Badge>}
+              </div>
+              {area.summary && <p className="mt-1.5 text-sm leading-relaxed text-ink-soft">{area.summary}</p>}
+            </div>
+            <div className="grid gap-4 md:grid-cols-2">
+              <div className="rounded-xl border border-emerald-100 bg-emerald-50/60 px-4 py-3">
+                <p className="mb-2 text-sm font-semibold text-emerald-800">What is good</p>
+                {area.strengths.length ? (
+                  <ul className="space-y-1.5">{area.strengths.map((s) => <li key={s} className="flex gap-2 text-sm text-ink-soft"><Check className="mt-0.5 size-4 shrink-0 text-emerald-600" />{s}</li>)}</ul>
+                ) : <p className="text-sm text-muted">Not listed in this review.</p>}
+              </div>
+              <div className="rounded-xl border border-amber-200 bg-amber-50/60 px-4 py-3">
+                <p className="mb-2 text-sm font-semibold text-amber-900">To improve · {area.issues.length}</p>
+                {area.issues.length ? (
+                  <ul className="max-h-72 space-y-2.5 overflow-y-auto pr-1">
+                    {area.issues.map((f, i) => {
+                      const flow = caseFor(f);
+                      return (
+                        <li key={i} className="text-sm">
+                          <span className="flex flex-wrap items-center gap-1.5">
+                            <Badge tone={SEVERITY_TONE[f.severity] ?? 'gray'}>{f.severity}</Badge>
+                            {flow && <button onClick={() => onOpenFlow(flow.id)} title={flow.title}
+                              className="cursor-pointer rounded bg-brand-50 px-1.5 font-mono text-xs font-medium text-brand-700 hover:bg-brand-100">{flow.code}</button>}
+                          </span>
+                          <span className="mt-1 block text-ink-soft">{f.issue}</span>
+                          {f.suggestion && <span className="mt-0.5 block text-muted">Fix: {f.suggestion}</span>}
+                        </li>
+                      );
+                    })}
+                  </ul>
+                ) : <p className="text-sm text-muted">Nothing to fix.</p>}
+              </div>
+            </div>
+            <div>
+              <p className="mb-2 text-xs font-semibold uppercase tracking-wide text-muted">Suggested flows for this area · {area.suggestions.length}</p>
+              {area.suggestions.length === 0 ? <p className="text-sm text-muted">No new flows suggested.</p> : (
+                <ul className="space-y-2">
+                  {area.suggestions.map((f, i) => {
+                    const isOpen = expanded === i;
+                    const steps = f.steps ?? [];
+                    return (
+                      <li key={i} className={cx('rounded-xl border', isOpen ? 'border-brand-500/40' : 'border-line')}>
+                        <div className="flex items-center gap-3 px-3.5 py-2.5">
+                          <button onClick={() => setExpanded(isOpen ? null : i)} aria-expanded={isOpen}
+                            className="flex min-w-0 flex-1 cursor-pointer items-center gap-2 text-left">
+                            <ChevronDown className={cx('size-4 shrink-0 text-muted transition-transform', !isOpen && '-rotate-90')} />
+                            <span className="min-w-0 flex-1 text-sm font-semibold text-ink">{shortTitle(f)}</span>
+                          </button>
+                          <span className="hidden shrink-0 flex-wrap gap-1.5 sm:flex">
+                            {f.type && <Badge tone="purple">{FLOW_TYPE[f.type] ?? f.type}</Badge>}
+                            {f.priority && <PriorityBadge priority={f.priority as 'P1' | 'P2' | 'P3'} />}
+                            <Badge tone={SEVERITY_TONE[f.severity] ?? 'gray'}>{f.severity}</Badge>
+                          </span>
+                          <Button size="sm" variant="secondary" onClick={() => draft(f)}>Draft flow</Button>
+                        </div>
+                        {isOpen && (
+                          <div className="space-y-2 border-t border-line px-4 py-3 pl-10 text-sm leading-relaxed">
+                            <p><span className="font-semibold text-ink">Why: </span><span className="text-ink-soft">{f.issue}</span></p>
+                            {steps.length > 0 ? (
+                              <div>
+                                <p className="font-semibold text-ink">Steps</p>
+                                <ol className="mt-1 list-decimal space-y-0.5 pl-5 text-ink-soft">{steps.map((step, n) => <li key={n}>{step}</li>)}</ol>
+                              </div>
+                            ) : f.suggestion && <p><span className="font-semibold text-ink">Steps: </span><span className="text-ink-soft">{f.suggestion}</span></p>}
+                          </div>
+                        )}
+                      </li>
+                    );
+                  })}
+                </ul>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
     </Card>
   );
 }
